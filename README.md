@@ -1,5 +1,10 @@
 # PeekAtGit
 
+[![CI](https://github.com/Filo6699/peekatgit/actions/workflows/ci.yml/badge.svg)](https://github.com/Filo6699/peekatgit/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![node >=22.18](https://img.shields.io/badge/node-%3E%3D22.18-informational)
+![dependencies: none](https://img.shields.io/badge/runtime%20deps-0-success)
+
 A tiny git viewer in its own window: every repository in a folder on the left, one file at a
 time on the right. No editor, no extensions.
 
@@ -146,9 +151,16 @@ The server pushes the ids of the repos that changed over SSE; the client re-read
 bun run build       # bundle src/client → public/app.js  (~10ms)
 bun run dev         # same, in watch mode
 bun run typecheck   # tsc --noEmit
+npm test            # node --test test/*.test.ts
+npm run check       # typecheck + tests, what CI runs
 ```
 
-`public/app.js` is a build artifact but is committed so the tool runs straight from a clone.
+`public/app.js` is a build artifact but is committed so the tool runs straight from a clone —
+CI fails if it does not match `src/client/`.
+
+The tests are `node:test` against real repositories created in a temp directory: nothing about
+git is mocked, and `test/server.test.ts` boots the actual CLI and talks to it over HTTP.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Layout
 
@@ -166,6 +178,7 @@ src/client/diff.ts        unified-diff parser
 src/client/highlight.ts   ~120-line syntax highlighter
 src/shared/types.ts       wire types shared by both sides
 public/                   index.html, style.css, built app.js
+test/                     node:test suites over real temporary repos
 ```
 
 ## Notes
