@@ -4,11 +4,18 @@
   "description": "A tiny, zero-dependency git viewer: source control + file explorer in the browser",
   "type": "module",
   "bin": { "peekatgit": "./src/server.ts" },
+  "keywords": ["git", "git-viewer", "source-control", "file-explorer", "cli", "zero-dependency"],
+  "homepage": "https://github.com/Filo6699/peekatgit#readme",
+  "repository": { "type": "git", "url": "git+https://github.com/Filo6699/peekatgit.git" },
+  "bugs": { "url": "https://github.com/Filo6699/peekatgit/issues" },
+  "files": ["src", "public", "README.md", "LICENSE"],
   "scripts": {
     "start": "node src/server.ts",
     "build": "bun build src/client/app.ts --outfile public/app.js --target browser --minify",
     "dev": "bun build src/client/app.ts --outfile public/app.js --target browser --watch",
     "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.ts",
+    "check": "npm run typecheck && npm test",
     "link": "mkdir -p ~/.local/bin && ln -sf \"$PWD/src/server.ts\" ~/.local/bin/peekatgit && echo 'linked → ~/.local/bin/peekatgit'"
   },
   "devDependencies": {
