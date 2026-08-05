@@ -1,0 +1,46 @@
+name: Bug report
+description: Something in PeekAtGit behaves the wrong way
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      placeholder: |
+        1. peekatgit ~/work
+        2. click …
+        3. …
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "Commit hash, or the output of `git -C <clone> rev-parse --short HEAD`"
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: "OS, `node --version`, `git --version`, and the browser used for the window"
+      placeholder: Arch Linux, node v24.2.0, git 2.49.0, chromium 137
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log output
+      description: "Contents of `~/.local/state/peekatgit/peekatgit.log`, if there is anything in it."
+      render: text

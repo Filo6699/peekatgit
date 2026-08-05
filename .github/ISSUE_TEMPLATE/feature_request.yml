@@ -1,0 +1,28 @@
+name: Feature request
+description: Suggest something PeekAtGit should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that is awkward or impossible today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind
+      description: A rough sketch is enough.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      description: PeekAtGit is a viewer, not an editor, and ships without dependencies.
+      options:
+        - label: This does not require a runtime dependency
+        - label: This does not turn PeekAtGit into a text editor

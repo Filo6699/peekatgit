@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to a PR makes the previous run pointless.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install
+      - run: bun run typecheck
+
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22.18 is the floor in engines: the first release that runs TypeScript
+        # without a flag. The rest are the lines users actually have installed.
+        node: ['22.18', '22', '24']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      # The tests shell out to git and commit; a runner has no identity of its own.
+      - name: Configure git
+        run: |
+          git config --global user.name 'CI'
+          git config --global user.email 'ci@example.invalid'
+          git config --global init.defaultBranch main
+      # No install step on purpose — nothing here has runtime dependencies.
+      - run: node --test test/*.test.ts
+
+  bundle:
+    name: client bundle is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install
+      - run: bun run build
+      - name: public/app.js matches src/client
+        run: |
+          if ! git diff --quiet -- public/app.js; then
+            echo '::error file=public/app.js::The committed bundle is stale. Run `npm run build` and commit public/app.js.'
+            git diff --stat -- public/app.js
+            exit 1
+          fi
+
+  smoke:
+    name: cli smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Serve this checkout and fetch the app shell
+        run: |
+          node src/server.ts . --port 4141 --no-open --foreground &
+          server=$!
+          for _ in $(seq 1 50); do
+            curl -sf http://127.0.0.1:4141/ >/dev/null && break
+            sleep 0.2
+          done
+          curl -sf http://127.0.0.1:4141/ | grep -q '<title>'
+          curl -sf http://127.0.0.1:4141/api/workspace | grep -q '"repos"'
+          kill $server
+      - name: --help exits cleanly
+        run: node src/server.ts --help | grep -q 'usage: peekatgit'
