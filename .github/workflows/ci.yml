@@ -86,5 +86,6 @@ jobs:
           curl -sf http://127.0.0.1:4141/ | grep -q '<title>'
           curl -sf http://127.0.0.1:4141/api/workspace | grep -q '"repos"'
           kill $server
-      - name: --help exits cleanly
-        run: node src/server.ts --help | grep -q 'usage: peekatgit'
+      - name: 'The --help screen prints and exits cleanly'
+        run: |
+          node src/server.ts --help | grep -q 'usage: peekatgit'
