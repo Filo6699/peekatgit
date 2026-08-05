@@ -8,6 +8,11 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: 'deps'
+    ignore:
+      # The types have to describe the oldest node we support, not the newest
+      # one released — see `engines` in package.json.
+      - dependency-name: '@types/node'
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: github-actions
     directory: /

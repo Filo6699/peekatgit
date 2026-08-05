@@ -66,5 +66,7 @@ export function detach(): Promise<never> {
 export function reportReady(info: Ready): void {
   if (!process.send) return
   process.send(info)
-  process.disconnect()
+  // Both only exist on a process started with an ipc channel — which is us,
+  // when the launcher spawned us, and nobody at all when run by hand.
+  process.disconnect?.()
 }
