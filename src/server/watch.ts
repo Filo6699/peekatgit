@@ -72,8 +72,6 @@ export function focus(repoId: string): void {
   void watchRepo(repoId, controller)
 }
 
-export const isWatched = (repoId: string): boolean => watchers.has(repoId)
-
 async function watchRepo(repoId: string, controller: AbortController): Promise<void> {
   try {
     for await (const event of watch(repoId, { recursive: true, signal: controller.signal })) {

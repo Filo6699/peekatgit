@@ -1,7 +1,7 @@
 // The workspace: one directory that either is a repository, or contains
 // repositories one level down. Worktrees registered by hand live here too.
 
-import { readdir, stat } from 'node:fs/promises'
+import { readdir } from 'node:fs/promises'
 import { existsSync, statSync, type Dirent } from 'node:fs'
 import path from 'node:path'
 import type { RepoSummary, TreeEntry, Workspace, Worktree } from '../shared/types.ts'
@@ -257,11 +257,3 @@ export async function visibleRepoIds(): Promise<string[]> {
 }
 
 export const allRepoIds = (): string[] => [...registry.keys()]
-
-export async function repoExists(id: string): Promise<boolean> {
-  try {
-    return (await stat(id)).isDirectory()
-  } catch {
-    return false
-  }
-}

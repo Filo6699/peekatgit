@@ -47,10 +47,6 @@ export async function allPrefs(workspace: string): Promise<Record<string, RepoPr
   return config.workspaces[workspace]?.repos ?? {}
 }
 
-export async function prefsFor(workspace: string, repoId: string): Promise<RepoPrefs> {
-  return (await allPrefs(workspace))[repoId] ?? {}
-}
-
 export async function updatePrefs(workspace: string, repoId: string, patch: RepoPrefs): Promise<void> {
   const config = await load()
   const entry = (config.workspaces[workspace] ??= { repos: {} })

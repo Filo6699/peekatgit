@@ -11,6 +11,7 @@ import * as workspace from './server/workspace.ts'
 import * as live from './server/watch.ts'
 import { openInBrowser, openWindow } from './server/window.ts'
 import { detach, isDetachedChild, logPath, reportReady } from './server/daemon.ts'
+import { configPath } from './server/config.ts'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const PUBLIC = path.resolve(HERE, '..', 'public')
@@ -38,6 +39,7 @@ for (let i = 2; i < process.argv.length; i++) {
         '  --foreground  stay attached to this terminal instead of detaching',
         '',
         `  logs of the background process: ${logPath}`,
+        `  per-repository preferences:     ${configPath}`,
       ].join('\n')
     )
     process.exit(0)
@@ -213,9 +215,11 @@ const server = createServer(async (req, res) => {
       }
     }
 
-    const relative = url.pathname === '/' ? 'index.html' : url.pathname.slice(1)
+    const relative = url.pathname === '/' ? 'index.html' : decodeURIComponent(url.pathname.slice(1))
     const file = path.join(PUBLIC, relative)
-    if (!file.startsWith(PUBLIC) || !existsSync(file)) return send(res, 404, 'not found', 'text/plain')
+    // The separator matters: without it a sibling directory whose name merely
+    // starts with "public" would pass for one of our own assets.
+    if (!file.startsWith(PUBLIC + path.sep) || !existsSync(file)) return send(res, 404, 'not found', 'text/plain')
     return send(res, 200, await readFile(file), MIME[path.extname(file)] ?? 'application/octet-stream')
   } catch (error) {
     json(res, { error: String((error as Error).message ?? error) }, 400)
