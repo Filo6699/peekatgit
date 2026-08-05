@@ -3,7 +3,7 @@
 
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { readFile, readdir, stat } from 'node:fs/promises'
+import { open, readdir } from 'node:fs/promises'
 import path from 'node:path'
 import type { ChangeEntry, FilePayload, StatusCode, StatusReport, TreeEntry, Worktree } from '../shared/types.ts'
 
@@ -160,11 +160,19 @@ const MAX_FILE = 2 * 1024 * 1024
 
 export async function fileContent(repo: string, relative: string): Promise<FilePayload> {
   const abs = resolveSafe(repo, relative)
-  const info = await stat(abs)
-  if (info.size > MAX_FILE) return { path: relative, size: info.size, tooBig: true }
-  const buffer = await readFile(abs)
-  if (buffer.subarray(0, 8000).includes(0)) return { path: relative, size: info.size, binary: true }
-  return { path: relative, size: info.size, content: buffer.toString('utf8') }
+  // One handle for both the size check and the read: measuring a path and then
+  // reading it again is a different file if it was replaced in between, and the
+  // size limit would be the one that got away.
+  const handle = await open(abs, 'r')
+  try {
+    const info = await handle.stat()
+    if (info.size > MAX_FILE) return { path: relative, size: info.size, tooBig: true }
+    const buffer = await handle.readFile()
+    if (buffer.subarray(0, 8000).includes(0)) return { path: relative, size: info.size, binary: true }
+    return { path: relative, size: info.size, content: buffer.toString('utf8') }
+  } finally {
+    await handle.close()
+  }
 }
 
 export async function hasHead(repo: string): Promise<boolean> {

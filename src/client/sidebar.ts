@@ -13,8 +13,7 @@ import { docKey, hooks, repoColor, state, type Doc } from './state.ts'
 const host = byId('sidebar')
 const tabsHost = byId('tabs')
 
-// Elements reused across renders so typing, focus and tree expansion survive a refresh.
-const trees = new Map<string, HTMLUListElement>()
+// Reused across renders so a half-typed commit message and its focus survive a refresh.
 const commitBoxes = new Map<string, { root: HTMLElement; textarea: HTMLTextAreaElement; button: HTMLButtonElement }>()
 
 /** The gutter mark for a change: what happened, in one character. */
