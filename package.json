@@ -19,7 +19,7 @@
     "link": "mkdir -p ~/.local/bin && ln -sf \"$PWD/src/server.ts\" ~/.local/bin/peekatgit && echo 'linked → ~/.local/bin/peekatgit'"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
+    "typescript": "^7.0.2",
     "@types/node": "^22.10.0"
   },
   "engines": { "node": ">=22.18" },
