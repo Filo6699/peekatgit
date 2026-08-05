@@ -1,0 +1,20 @@
+{
+  "name": "peekatgit",
+  "version": "0.1.0",
+  "description": "A tiny, zero-dependency git viewer: source control + file explorer in the browser",
+  "type": "module",
+  "bin": { "peekatgit": "./src/server.ts" },
+  "scripts": {
+    "start": "node src/server.ts",
+    "build": "bun build src/client/app.ts --outfile public/app.js --target browser --minify",
+    "dev": "bun build src/client/app.ts --outfile public/app.js --target browser --watch",
+    "typecheck": "tsc --noEmit",
+    "link": "mkdir -p ~/.local/bin && ln -sf \"$PWD/src/server.ts\" ~/.local/bin/peekatgit && echo 'linked → ~/.local/bin/peekatgit'"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^22.10.0"
+  },
+  "engines": { "node": ">=22.18" },
+  "license": "MIT"
+}

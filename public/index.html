@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PeekAtGit</title>
+    <link rel="stylesheet" href="/style.css" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%23131210'/><rect x='4' y='3' width='2' height='10' fill='%23a3cb6d'/><rect x='8' y='3' width='2' height='10' fill='%23f0bd5c'/></svg>" />
+  </head>
+  <body>
+    <header class="topbar">
+      <span class="logo">peekatgit</span>
+      <span class="ws-name" id="wsName"></span>
+      <span class="count" id="repoCount"></span>
+      <span class="spacer"></span>
+      <button class="ghost" id="toggleHidden" hidden></button>
+      <span class="pulse" id="pulse" title="Watching for changes"></span>
+    </header>
+
+    <main class="layout">
+      <aside class="side">
+        <nav class="tabs" id="tabs"></nav>
+        <div class="sidebar" id="sidebar"></div>
+      </aside>
+      <div class="grip" id="grip" title="Drag to resize"></div>
+
+      <section class="viewer">
+        <div class="viewer-head" id="viewerHead"></div>
+        <div class="viewer-body" id="viewerBody">
+          <div class="blank">
+            <p>Pick a change from any repository on the left.</p>
+            <p class="hint">One file at a time. The Files tab browses the whole project.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
