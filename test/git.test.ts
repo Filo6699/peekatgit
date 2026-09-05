@@ -154,6 +154,7 @@ describe('against a real repository', () => {
 
     assert.match(await diff(repo, 'a.txt', false, false), /^\+two$/m)
     assert.match(await diff(repo, 'b.txt', false, true), /^\+brand new$/m)
+    await assert.rejects(() => diff(repo, 'missing.txt', false, true))
     await assert.rejects(() => diff(repo, '../outside.txt', false, false), /escapes repository/)
   })
 

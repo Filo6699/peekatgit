@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
+import { limitConcurrency } from './queue.ts'
 import type {
   ChangeEntry,
   GraphCommit,
@@ -14,11 +15,13 @@ import type {
 } from '../shared/types.ts'
 
 const exec = promisify(execFile)
+const localGit = limitConcurrency(4)
+const remoteGit = limitConcurrency(2)
 
 type ExecFailure = { stdout?: string; stderr?: string; message?: string }
 
-export async function git(repo: string, args: string[]): Promise<string> {
-  const { stdout } = await exec('git', args, { cwd: repo, maxBuffer: 64 * 1024 * 1024, encoding: 'utf8' })
+export async function git(repo: string, args: string[], maxBuffer = 8 * 1024 * 1024): Promise<string> {
+  const { stdout } = await localGit(() => exec('git', args, { cwd: repo, maxBuffer, encoding: 'utf8', timeout: 30_000 }))
   return stdout
 }
 
@@ -93,14 +96,14 @@ export async function headAndStatus(repo: string): Promise<{ head: Head; report:
 }
 
 export const rawStatus = (repo: string): Promise<string> =>
-  gitSoft(repo, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])
+  git(repo, ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=all'])
 
 /**
  * One call whose output changes whenever anything the sidebar shows changes —
  * `-b` folds branch and ahead/behind into the same string. Compared, not parsed.
  */
 export const pollSignature = (repo: string): Promise<string> =>
-  gitSoft(repo, ['status', '--porcelain=v1', '-z', '-b', '--untracked-files=all'])
+  git(repo, ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '-b', '--untracked-files=all'])
 
 /** `git status --porcelain=v1 -z`: NUL-separated records; renames carry a second path. */
 export function parseStatus(raw: string): StatusReport {
@@ -236,11 +239,20 @@ export function resolveSafe(repo: string, relative: string): string {
 }
 
 export async function diff(repo: string, file: string, staged: boolean, untracked: boolean): Promise<string> {
-  resolveSafe(repo, file)
-  if (untracked) return gitSoft(repo, ['diff', '--no-index', '--no-color', '/dev/null', file])
-  const args = ['diff', '--no-color']
+  const absolute = resolveSafe(repo, file)
+  const args = ['diff', '--no-color', '--no-ext-diff', '--no-textconv']
   if (staged) args.push('--cached')
-  return gitSoft(repo, [...args, '--', file])
+  if (untracked) args.push('--no-index', '--', '/dev/null', absolute)
+  else args.push('--', file)
+  try {
+    return await git(repo, args, 4 * 1024 * 1024)
+  } catch (error) {
+    // --no-index uses exit 1 to report differences; other errors must reach the UI.
+    const failure = error as ExecFailure & { code?: number | string }
+    if (untracked && failure.code === 1 && failure.stdout && !failure.stderr) return failure.stdout
+    if (failure.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') throw new Error('Diff exceeds the 4 MB preview limit.')
+    throw error
+  }
 }
 
 // ---------------------------------------------------------------- sync
@@ -259,13 +271,13 @@ const REMOTE_ENV = {
 }
 
 async function gitRemote(repo: string, args: string[]): Promise<string> {
-  const { stdout } = await exec('git', args, {
+  const { stdout } = await remoteGit(() => exec('git', args, {
     cwd: repo,
     encoding: 'utf8',
     maxBuffer: 8 * 1024 * 1024,
     timeout: REMOTE_TIMEOUT_MS,
     env: { ...process.env, ...REMOTE_ENV },
-  })
+  }))
   return stdout
 }
 

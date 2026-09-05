@@ -122,6 +122,16 @@ describe('http api', () => {
     assert.equal(summary.repos[0]?.branch, 'main')
   })
 
+  test('workspace ships matching status snapshots and partial refreshes omit other reports', async () => {
+    const full = await json<Workspace & { statuses: Record<string, { staged: unknown[]; changes: unknown[] }> }>('/api/workspace')
+    for (const repo of full.repos) {
+      assert.equal(full.statuses[repo.id]?.staged.length, repo.staged)
+      assert.equal(full.statuses[repo.id]?.changes.length, repo.changes)
+    }
+    const partial = await json<{ statuses: Record<string, unknown> }>(`/api/workspace?partial=1&repo=${encodeURIComponent(alpha)}`)
+    assert.deepEqual(Object.keys(partial.statuses), [alpha])
+  })
+
   test('serves the app shell and 404s for anything else', async () => {
     const index = await get('/')
     assert.equal(index.status, 200)

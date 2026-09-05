@@ -11,6 +11,7 @@ async function getJson<T>(url: string): Promise<T> {
   const response = await fetch(url)
   const data = (await response.json()) as T & { error?: string }
   if (data && typeof data === 'object' && 'error' in data && data.error) throw new Error(data.error)
+  if (!response.ok) throw new Error(`Request failed (${response.status})`)
   return data
 }
 
@@ -20,14 +21,20 @@ async function post<T = MutationResult>(route: string, payload: Record<string, u
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
   })
-  return (await response.json()) as T
+  const data = (await response.json()) as T & { error?: string }
+  if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`)
+  return data
 }
 
 const repoQuery = (repo: string, extra: Record<string, string> = {}): string =>
   new URLSearchParams({ repo, ...extra }).toString()
 
 export const api = {
-  workspace: (): Promise<Workspace> => getJson('/api/workspace'),
+  workspace: (repos?: string[]): Promise<Workspace> => {
+    const query = new URLSearchParams()
+    if (repos) { query.set('partial', '1'); for (const id of repos) query.append('repo', id) }
+    return getJson(`/api/workspace?${query}`)
+  },
 
   status: (repos: string[]): Promise<Record<string, StatusReport>> => {
     if (!repos.length) return Promise.resolve({})
@@ -43,10 +50,14 @@ export const api = {
 
 
 
-  diff: (repo: string, file: string, staged: boolean, untracked: boolean): Promise<string> =>
+  diff: (repo: string, file: string, staged: boolean, untracked: boolean, signal?: AbortSignal): Promise<string> =>
     fetch(
       `/api/diff?${repoQuery(repo, { path: file, staged: staged ? '1' : '0', untracked: untracked ? '1' : '0' })}`
-    ).then(response => response.text()),
+      , { signal }
+    ).then(async response => {
+      if (!response.ok) throw new Error(((await response.json()) as { error: string }).error)
+      return response.text()
+    }),
 
 
 

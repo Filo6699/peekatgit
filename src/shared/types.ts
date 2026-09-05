@@ -45,6 +45,8 @@ export type Workspace = {
   /** True when the workspace root is itself a repository. */
   rootIsRepo: boolean
   repos: RepoSummary[]
+  /** Reports share the same Git snapshot as their repository summaries. */
+  statuses?: Record<string, StatusReport>
   /** Set when the server runs with PEEKATGIT_TRACE=1; the client then reports its own timings. */
   trace?: boolean
 }

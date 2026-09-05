@@ -174,7 +174,7 @@ const server = createServer(async (req, res) => {
   try {
     switch (url.pathname) {
       case '/api/workspace':
-        return json(res, { ...(await workspace.describe()), trace: TRACE })
+        return json(res, { ...(await workspace.describe(query.has('partial') ? query.getAll('repo') : undefined)), trace: TRACE })
 
       case '/api/status':
         return json(res, await statusFor(query.getAll('repo')))

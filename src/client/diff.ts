@@ -16,16 +16,19 @@ export function parseDiff(raw: string): DiffRow[] {
   let oldLine = 0
   let newLine = 0
 
+  let inHunk = false
   for (const line of raw.split('\n')) {
-    if (line.startsWith('diff --git') || line.startsWith('index ') || line.startsWith('--- ') || line.startsWith('+++ ')) {
+    if (line.startsWith('diff --git')) inHunk = false
+    if (!inHunk && (line.startsWith('diff --git') || line.startsWith('index ') || line.startsWith('--- ') || line.startsWith('+++ '))) {
       continue
     }
-    if (line.startsWith('new file') || line.startsWith('deleted file') || line.startsWith('rename ') || line.startsWith('similarity ')) {
+    if (line.startsWith('new file') || line.startsWith('deleted file') || line.startsWith('rename ') || line.startsWith('similarity ') || line.startsWith('Binary files ') || line.startsWith('old mode ') || line.startsWith('new mode ')) {
       rows.push({ kind: 'meta', text: line, oldLine: null, newLine: null })
       continue
     }
     const hunk = HUNK.exec(line)
     if (hunk) {
+      inHunk = true
       oldLine = Number(hunk[1])
       newLine = Number(hunk[2])
       rows.push({ kind: 'hunk', text: line, oldLine: null, newLine: null })
@@ -37,9 +40,6 @@ export function parseDiff(raw: string): DiffRow[] {
     else if (line.startsWith(' ')) rows.push({ kind: 'ctx', text: line.slice(1), oldLine: oldLine++, newLine: newLine++ })
   }
 
-  // A trailing empty context row is an artifact of the final newline.
-  const last = rows[rows.length - 1]
-  if (last && last.kind === 'ctx' && last.text === '') rows.pop()
   return rows
 }
 

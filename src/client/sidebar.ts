@@ -14,6 +14,8 @@ import { docKey, hooks, repoColor, setTab, state, visibleRepos, type Doc } from 
 
 const host = byId('sidebar')
 const tabsHost = byId('tabs')
+const sections = new Map<string, { key: string; report: unknown; node: HTMLElement }>()
+let tabsKey = ''
 
 // Reused across renders so a half-typed commit message and its focus survive a refresh.
 const commitBoxes = new Map<string, { root: HTMLElement; textarea: HTMLTextAreaElement; button: HTMLButtonElement }>()
@@ -32,16 +34,37 @@ const MARK: Record<StatusCode, [mark: string, tone: string, label: string]> = {
 
 export function renderSidebar(): void {
   renderTabs()
+  for (const row of host.querySelectorAll<HTMLElement>('[data-doc]')) {
+    row.classList.toggle('active', row.dataset.doc === docKey(state.doc))
+  }
   if (state.tab === 'graph') return host.replaceChildren(graphList())
 
   const repos = state.workspace.repos.filter(repo => state.showHidden || !repo.hidden)
   const busy = repos.filter(repo => repo.staged || repo.changes || state.errors[repo.id] || repo.error)
-  const quiet = repos.filter(repo => !busy.includes(repo))
+  const busyIds = new Set(busy.map(repo => repo.id))
+  const quiet = repos.filter(repo => !busyIds.has(repo.id))
+  const known = new Set(repos.map(repo => repo.id))
+  for (const id of sections.keys()) if (!known.has(id)) sections.delete(id)
+  const nodes: HTMLElement[] = [...busy, ...quiet].map(cachedSection)
+  if (!nodes.length) nodes.push(el('div', 'empty', 'No repositories here.'))
+  const active = document.activeElement as HTMLElement | null
+  // Move only nodes whose order changed. Unaffected commit inputs keep focus.
+  nodes.forEach((node, index) => {
+    if (host.children[index] !== node) host.insertBefore(node, host.children[index] ?? null)
+  })
+  while (host.children.length > nodes.length) host.lastElementChild!.remove()
+  if (active?.isConnected && document.activeElement !== active) active.focus({ preventScroll: true })
+}
 
-  host.replaceChildren(
-    ...(repos.length ? busy.map(repoSection) : [el('div', 'empty', 'No repositories here.')]),
-    ...(quiet.length ? [quietBlock(quiet)] : [])
-  )
+function cachedSection(repo: RepoSummary): HTMLElement {
+  const key = JSON.stringify([repo, state.errors[repo.id], state.collapsed.has(repo.id),
+    state.syncing.has(repo.id), state.worktreesOpen.has(repo.id), state.worktrees[repo.id]])
+  const previous = sections.get(repo.id)
+  const report = state.statuses[repo.id]
+  if (previous?.key === key && previous.report === report) return previous.node
+  const node = repoSection(repo)
+  sections.set(repo.id, { key, report, node })
+  return node
 }
 
 function renderTabs(): void {
@@ -50,6 +73,9 @@ function renderTabs(): void {
     ['changes', 'Changes', total ? String(total) : ''],
     ['graph', 'History', ''],
   ]
+  const key = `${state.tab}:${total}`
+  if (tabsKey === key) return
+  tabsKey = key
   tabsHost.replaceChildren(
     ...tabs.map(([key, label, badge]) => {
       const button = el('button', `tab${state.tab === key ? ' on' : ''}`, label)
@@ -270,6 +296,7 @@ function fileRow(
   const [mark, tone, label] = MARK[entry.status] ?? ['·', '', entry.status]
 
   const item = el('li', 'row file')
+  item.dataset.doc = docKey(doc)
   item.classList.toggle('active', docKey(doc) === docKey(state.doc))
   item.title = `${entry.path} — ${label}`
   item.append(el('span', `gut ${tone}`, mark), el('span', 'fname', name))

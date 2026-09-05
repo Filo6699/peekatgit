@@ -9,7 +9,7 @@
 // across the whole workspace, which is exactly the load we are avoiding.
 
 import { watch as watchDirectory } from 'node:fs'
-import { readdir, watch } from 'node:fs/promises'
+import { readdir, readFile, watch } from 'node:fs/promises'
 import path from 'node:path'
 import type { ServerResponse } from 'node:http'
 import type { ChangeEvent } from '../shared/types.ts'
@@ -17,6 +17,7 @@ import { pollSignature } from './git.ts'
 import { invalidate, scan, visibleRepoIds, workspaceRoot } from './workspace.ts'
 
 const MAX_WATCHERS = 3
+const MAX_DIRECTORIES = 256
 const POLL_MS = 2500
 /**
  * Never worth an inotify handle: build output and dependency trees are large,
@@ -48,12 +49,13 @@ export function removeClient(res: ServerResponse): void {
 /** Queues a change notice; bursts of filesystem events collapse into one message. */
 export function notify(repoId: string): void {
   invalidate(repoId)
+  signatures.delete(repoId)
   pending.add(repoId)
-  clearTimeout(flushTimer)
-  flushTimer = setTimeout(flush, 120)
+  flushTimer ??= setTimeout(flush, 120)
 }
 
 function flush(): void {
+  flushTimer = undefined
   if (!pending.size || !clients.size) {
     pending.clear()
     return
@@ -98,13 +100,17 @@ async function watchRepo(repoId: string, controller: AbortController): Promise<v
   const watched = new Set<string>()
   // git's own directory is watched flat: the index and HEAD are worth hearing
   // about, the loose objects churning under them are not.
-  watchDir(repoId, path.join(repoId, '.git'), controller, watched)
+  let gitDir = path.join(repoId, '.git')
+  try {
+    gitDir = path.resolve(repoId, (await readFile(gitDir, 'utf8')).replace(/^gitdir:\s*/, '').trim())
+  } catch { /* ordinary checkout: .git is a directory */ }
+  watchDir(repoId, gitDir, controller, watched, true)
   await walk(repoId, repoId, controller, watched)
 }
 
 async function walk(repoId: string, dir: string, controller: AbortController, watched: Set<string>): Promise<void> {
   const name = path.basename(dir)
-  if (controller.signal.aborted || watched.has(dir) || name === '.git' || UNWATCHED.has(name)) return
+  if (controller.signal.aborted || watched.size >= MAX_DIRECTORIES || watched.has(dir) || name === '.git' || UNWATCHED.has(name)) return
 
   let entries
   try {
@@ -121,30 +127,38 @@ async function walk(repoId: string, dir: string, controller: AbortController, wa
   }
 }
 
-function watchDir(repoId: string, dir: string, controller: AbortController, watched: Set<string>): void {
-  if (watched.has(dir)) return
+function watchDir(repoId: string, dir: string, controller: AbortController, watched: Set<string>, inGit = false): void {
+  if (controller.signal.aborted || watched.size >= MAX_DIRECTORIES || watched.has(dir)) return
   watched.add(dir)
   try {
     const handle = watchDirectory(dir, { signal: controller.signal }, (_event, name) => {
-      const inGit = dir.endsWith(`${path.sep}.git`)
       // git writes constantly; only the files that mean "the index moved" count.
-      if (inGit && !/^(index|HEAD|MERGE_MSG)$/.test(String(name ?? ''))) return
+      if (inGit && !/^(index|HEAD|MERGE_MSG|packed-refs|commondir)$/.test(String(name ?? ''))) return
       notify(repoId)
       // A new directory only becomes visible through its parent, so this is
       // where a fresh `src/feature/` picks up a watcher of its own.
       if (!inGit && name) void walk(repoId, path.join(dir, String(name)), controller, watched)
     })
-    handle.on('error', () => handle.close())
+    handle.on('error', () => { handle.close(); watched.delete(dir) })
   } catch {
     // Unreadable or already gone; the poll loop still covers this repo.
   }
 }
 
 let cursor = 0
+let polling = false
 
 /** Slow round-robin sweep over everything the watchers do not cover. */
 async function poll(): Promise<void> {
-  const ids = (await visibleRepoIds()).filter(id => !watchers.has(id))
+  if (polling || !clients.size) return
+  polling = true
+  try {
+  const ids = await visibleRepoIds()
+  const visible = new Set(ids)
+  for (const [id, controller] of watchers) {
+    if (!visible.has(id)) { controller.abort(); watchers.delete(id) }
+  }
+  for (const id of signatures.keys()) if (!visible.has(id)) signatures.delete(id)
   if (!ids.length) return
   if (cursor >= ids.length) cursor = 0
   const batch = ids.slice(cursor, cursor + POLL_BATCH)
@@ -161,6 +175,7 @@ async function poll(): Promise<void> {
       // Repo vanished; the next rescan will drop it.
     }
   }
+  } finally { polling = false }
 }
 
 /**
@@ -172,7 +187,8 @@ async function watchWorkspaceRoot(): Promise<void> {
   const root = workspaceRoot()
   let timer: NodeJS.Timeout | undefined
   try {
-    for await (const _event of watch(root)) {
+    for await (const event of watch(root)) {
+      if (event.eventType !== 'rename') continue
       clearTimeout(timer)
       timer = setTimeout(() => {
         void scan().then(() => notify(root))

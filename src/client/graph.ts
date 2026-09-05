@@ -11,6 +11,7 @@ import { byId, el } from './dom.ts'
 import { ago, layoutGraph, type Edge, type Layout, type Placed } from './lanes.ts'
 import { showPane } from './panes.ts'
 import { hooks, repoColor, state, visibleRepos } from './state.ts'
+import { refreshQueue } from './refresh.ts'
 import { mark } from './trace.ts'
 
 const ROW = 22
@@ -29,6 +30,7 @@ const metaEl = byId('graphMeta')
 const depthEl = byId<HTMLSelectElement>('graphDepth')
 
 const graphs = new Map<string, RepoGraph>()
+const rendered = new Map<string, { report: RepoGraph; node: HTMLElement }>()
 let depth = Number(localStorage.getItem(DEPTH_KEY)) || 60
 let loading = false
 
@@ -143,7 +145,19 @@ function render(): void {
   }
   const total = columns.reduce((sum, report) => sum + report.commits.length, 0)
   metaEl.textContent = `${columns.length} repo${columns.length === 1 ? '' : 's'} · ${total} commits`
-  host.replaceChildren(...columns.map(column))
+  const nodes = columns.map(report => {
+    const previous = rendered.get(report.repo)
+    if (previous?.report === report) return previous.node
+    const node = column(report)
+    rendered.set(report.repo, { report, node })
+    return node
+  })
+  const known = new Set(columns.map(report => report.repo))
+  for (const id of rendered.keys()) if (!known.has(id)) rendered.delete(id)
+  nodes.forEach((node, index) => {
+    if (host.children[index] !== node) host.insertBefore(node, host.children[index] ?? null)
+  })
+  while (host.children.length > nodes.length) host.lastElementChild!.remove()
 }
 
 /**
@@ -151,7 +165,7 @@ function render(): void {
  * Nothing happens while another tab is up — the graph is the most expensive
  * thing here, and it is only worth its `git log` when it is on screen.
  */
-export async function refreshGraph(repoIds?: string[]): Promise<void> {
+export const refreshGraph = refreshQueue(async (repoIds?: string[]): Promise<void> => {
   if (state.tab !== 'graph') return
   const visible = visibleRepos().filter(repo => !repo.hidden).map(repo => repo.id)
   const wanted = repoIds ? visible.filter(id => repoIds.includes(id)) : visible
@@ -163,7 +177,7 @@ export async function refreshGraph(repoIds?: string[]): Promise<void> {
 
   const done = mark('graph')
   loading = true
-  render()
+  if (!graphs.size) render()
   try {
     for (const report of await api.graph(ask, depth)) graphs.set(report.repo, report)
   } finally {
@@ -172,7 +186,7 @@ export async function refreshGraph(repoIds?: string[]): Promise<void> {
   render()
   hooks.paint() // the sidebar counts what was just read
   done(`${ask.length} repos × ${depth}`)
-}
+})
 
 /** Called when the Graph tab is picked: take the pane, then fill it. */
 export function openGraph(): void {

@@ -560,3 +560,10 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 
 
 [hidden] { display: none !important; }
+
+.diff { line-height: 22px; tab-size: 4; }
+.d-row { height: 22px; }
+.d-hunk, .d-meta { margin: 0; }
+.virtual-diff { position: relative; padding: 0; }
+.diff-window { position: absolute; top: 0; left: 0; right: 0; }
+.app-error { position: fixed; z-index: 10; bottom: 12px; right: 12px; max-width: 600px; padding: 12px; background: var(--ink-2); border: 1px solid var(--rust); }

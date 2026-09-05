@@ -4,7 +4,7 @@
 import { readdir } from 'node:fs/promises'
 import { existsSync, statSync, type Dirent } from 'node:fs'
 import path from 'node:path'
-import type { RepoSummary, Workspace, Worktree } from '../shared/types.ts'
+import type { RepoSummary, StatusReport, Workspace, Worktree } from '../shared/types.ts'
 import { allPrefs, forgetRepo, updatePrefs } from './config.ts'
 import { headAndStatus, toplevel, worktreeCount, worktrees as listWorktrees } from './git.ts'
 
@@ -144,43 +144,43 @@ type RepoFacts = Pick<
   'branch' | 'tracking' | 'ahead' | 'behind' | 'staged' | 'changes' | 'worktrees' | 'error'
 >
 
-const facts = new Map<string, RepoFacts>()
+type Snapshot = { facts: RepoFacts; report: StatusReport }
+const facts = new Map<string, { value: Promise<Snapshot>; expires: number }>()
 
 /** Called by the live layer: this repo moved, so its facts must be re-read. */
 export function invalidate(id: string): void {
   facts.delete(id)
 }
 
-async function factsFor(id: string): Promise<RepoFacts> {
+function factsFor(id: string, refresh: boolean): Promise<Snapshot> {
   const cached = facts.get(id)
-  if (cached) return cached
-  try {
-    const [{ head: info, report }, trees] = await Promise.all([headAndStatus(id), worktreeCount(id)])
-    const fresh: RepoFacts = {
-      ...info,
-      staged: report.staged.length,
-      changes: report.changes.length,
-      worktrees: trees,
+  if (cached && (!refresh || cached.expires > Date.now())) return cached.value
+  const value = (async (): Promise<Snapshot> => {
+    try {
+      const [{ head, report }, trees] = await Promise.all([headAndStatus(id), worktreeCount(id)])
+      return { facts: { ...head, staged: report.staged.length, changes: report.changes.length, worktrees: trees }, report }
+    } catch (error) {
+      return {
+        facts: { branch: '', tracking: '', ahead: 0, behind: 0, staged: 0, changes: 0, worktrees: 0, error: String((error as Error).message ?? error) },
+        report: { staged: [], changes: [] },
+      }
     }
-    facts.set(id, fresh)
-    return fresh
-  } catch (error) {
-    return {
-      branch: '',
-      tracking: '',
-      ahead: 0,
-      behind: 0,
-      staged: 0,
-      changes: 0,
-      worktrees: 0,
-      error: String((error as Error).message ?? error),
-    }
-  }
+  })()
+  // Store the promise immediately: concurrent requests share the same subprocess.
+  // Invalidating deletes this entry; its eventual completion cannot repopulate it.
+  facts.set(id, { value, expires: Infinity })
+  void value.then(() => {
+    const entry = facts.get(id)
+    if (entry?.value === value) entry.expires = Date.now() + 2500
+  })
+  return value
 }
 
 /** Full picture for the sidebar. Hidden repos skip the git calls entirely. */
-export async function describe(): Promise<Workspace> {
+export async function describe(requested?: string[]): Promise<Workspace> {
   const prefs = await allPrefs(root)
+  const statuses: Record<string, StatusReport> = {}
+  const wanted = requested ? new Set(requested) : null
   const records = [...registry.values()].sort((a, b) => a.name.localeCompare(b.name))
   const duplicated = new Set(
     records.map(r => r.name).filter((name, i, all) => all.indexOf(name) !== i)
@@ -206,12 +206,14 @@ export async function describe(): Promise<Workspace> {
         pinned: repo.pinned,
       }
       if (base.hidden) return base
-      return { ...base, ...(await factsFor(repo.id)) }
+      const snapshot = await factsFor(repo.id, !wanted || wanted.has(repo.id))
+      if (!wanted || wanted.has(repo.id)) statuses[repo.id] = snapshot.report
+      return { ...base, ...snapshot.facts }
     })
   )
 
   repos.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
-  return { root, name: path.basename(root), rootIsRepo, repos }
+  return { root, name: path.basename(root), rootIsRepo, repos, statuses }
 }
 
 export async function worktreesOf(id: string): Promise<Worktree[]> {

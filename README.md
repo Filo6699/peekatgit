@@ -94,6 +94,14 @@ The application is focused on Git. There is no file editor, project explorer or 
 terminal. Select a changed file to review its unified diff with line numbers and syntax
 colouring. Use Ctrl/Cmd+Enter in a commit message to commit staged changes.
 
+## Performance
+
+Workspace summaries and change lists share one Git status snapshot. Concurrent requests
+reuse in-flight reads, and local Git subprocesses are limited to four at a time. Live events
+are coalesced and refreshes are serialized; unchanged repository sections retain their DOM.
+Large patches render only visible rows, with a 4 MB diff preview limit. Focused repositories
+use at most 256 directory watchers each; polling also covers focused and linked worktrees.
+
 ## Why it stays small
 
 No runtime dependencies, framework, web fonts or Electron. The server uses Node's standard

@@ -1,109 +1,131 @@
-// The right-hand pane: exactly one file or one diff at a time.
-
 import { api } from './api.ts'
 import { countChanges, parseDiff, type DiffRow } from './diff.ts'
 import { actionButton, byId, el } from './dom.ts'
 import { escapeHtml, highlight, languageOf } from './highlight.ts'
-import { hooks, repoColor, state, type Doc } from './state.ts'
-import { mark } from './trace.ts'
+import { docKey, hooks, repoColor, state, type Doc } from './state.ts'
 
 const headEl = byId('viewerHead')
 const bodyEl = byId('viewerBody')
-
-const repoName = (id: string): string => state.workspace.repos.find(repo => repo.id === id)?.name ?? id
-
-/** The repo the server was last asked to watch closely. */
+const ROW_HEIGHT = 22
+let request: AbortController | null = null
 let focused = ''
+let previous = ''
+let previousKey = ''
+let stopDrawing = (): void => {}
 
 export async function openDoc(doc: Doc): Promise<void> {
-  const done = mark(`open ${doc.kind}`)
+  const changed = docKey(doc) !== docKey(state.doc)
   state.doc = doc
-  // Ask the server to watch this repo closely — but only when the answer would
-  // change. Reading ten files in one repo is one request, not ten.
   if (doc.repo !== focused) {
     focused = doc.repo
     void api.focus(doc.repo)
   }
-  await renderDiff(doc)
-  done(doc.path)
+  if (changed) {
+    stopDrawing()
+    headEl.replaceChildren(el('span', 'crumb', doc.path))
+    bodyEl.replaceChildren(el('div', 'blank', 'Loading diff…'))
+    bodyEl.scrollTop = bodyEl.scrollLeft = 0
+  }
+  await renderDiff(doc, !changed)
 }
 
-/** Re-renders whatever is open, keeping the scroll position. */
 export async function refreshDoc(): Promise<void> {
-  if (!state.doc) return
-  const scroll = bodyEl.scrollTop
-  try {
-    await renderDiff(state.doc)
-    bodyEl.scrollTop = scroll
-  } catch {
-    // The open file was deleted or renamed underneath us.
-    setHead(null, state.doc.path, metaText('gone'), [])
-    bodyEl.innerHTML = '<div class="blank"><p>This file no longer exists.</p></div>'
-    state.doc = null
-  }
+  if (state.doc) await renderDiff(state.doc, true)
 }
 
-/** The file's identity, read as one path: the repo owns the colour, the name the weight. */
-function setHead(repo: string | null, filePath: string, meta: HTMLElement, actions: HTMLElement[]): void {
-  const cut = filePath.lastIndexOf('/')
+function setHead(doc: Doc, added: number, removed: number): void {
+  const repo = state.workspace.repos.find(repo => repo.id === doc.repo)
   const crumb = el('span', 'crumb')
-  if (repo) {
-    const owner = el('span', 'c-repo', `${repoName(repo)}/`)
-    owner.style.color = repoColor(repo)
-    crumb.append(owner)
-  }
-  if (cut !== -1) crumb.append(el('span', 'c-dir', `${filePath.slice(0, cut)}/`))
-  crumb.append(el('span', 'c-file', cut === -1 ? filePath : filePath.slice(cut + 1)))
-  crumb.title = repo ? `${repoName(repo)}/${filePath}` : filePath
-  headEl.replaceChildren(crumb, meta, el('span', 'spacer'), ...actions)
+  const owner = el('span', 'c-repo', `${repo?.name ?? doc.repo} / `)
+  owner.style.color = repoColor(doc.repo)
+  crumb.append(owner, el('span', 'c-file', doc.path))
+  crumb.title = doc.path
+  const meta = el('span', 'meta', doc.staged ? 'Staged  ' : 'Working tree  ')
+  if (added) meta.append(el('span', 'm-add', `+${added} `))
+  if (removed) meta.append(el('span', 'm-del', `−${removed}`))
+  headEl.replaceChildren(crumb, meta, el('span', 'spacer'),
+    actionButton(doc.staged ? 'Unstage' : 'Stage file', doc.staged ? 'Unstage this file' : 'Stage this file', async () => {
+      const paths = doc.from ? [doc.path, doc.from] : [doc.path]
+      const result = await (doc.staged ? api.unstage(doc.repo, paths) : api.stage(doc.repo, paths))
+      if (!result.ok) throw new Error(result.error)
+      await hooks.refresh([doc.repo])
+    }))
 }
 
-const metaText = (text: string): HTMLElement => el('span', 'meta', text)
+async function renderDiff(doc: Doc, preserve: boolean): Promise<void> {
+  request?.abort()
+  const controller = new AbortController()
+  request = controller
+  const key = docKey(doc)
+  try {
+    const raw = await api.diff(doc.repo, doc.path, doc.staged, doc.untracked, controller.signal)
+    if (controller.signal.aborted || key !== docKey(state.doc)) return
+    if (preserve && raw === previous && key === previousKey) return
+    const scroll = preserve ? bodyEl.scrollTop : 0
+    const rows = parseDiff(raw)
+    const { added, removed } = countChanges(rows)
+    setHead(doc, added, removed)
+    stopDrawing()
+    if (!rows.length) {
+      bodyEl.replaceChildren(el('div', 'blank', 'No changes in this view. Select another file to continue.'))
+    } else drawRows(rows, languageOf(doc.path), scroll)
+    previous = raw
+    previousKey = key
+  } catch (error) {
+    if (controller.signal.aborted || key !== docKey(state.doc)) return
+    stopDrawing()
+    previousKey = ''
+    bodyEl.replaceChildren(el('div', 'blank err', (error as Error).message))
+  }
+}
 
-async function renderDiff(doc: Extract<Doc, { kind: 'diff' }>): Promise<void> {
-  const fetched = mark('  fetch diff')
-  const raw = await api.diff(doc.repo, doc.path, doc.staged, doc.untracked)
-  fetched(`${raw.length} bytes`)
-  const rows = parseDiff(raw)
-  const { added, removed } = countChanges(rows)
-
-  const meta = el('span', 'meta')
-  meta.append(doc.staged ? 'staged' : 'working tree', '  ')
-  if (added) meta.append(el('span', 'm-add', `+${added}`), ' ')
-  if (removed) meta.append(el('span', 'm-del', `−${removed}`))
-
-  setHead(doc.repo, doc.path, meta, [
-    actionButton(doc.staged ? 'unstage' : 'stage', doc.staged ? 'Unstage this file' : 'Stage this file', async () => {
-      await (doc.staged ? api.unstage(doc.repo, [doc.path]) : api.stage(doc.repo, [doc.path]))
-      await hooks.refresh([doc.repo])
-    }),
-  ])
-
-  if (!rows.length) {
-    bodyEl.innerHTML = '<div class="blank"><p>No textual changes.</p></div>'
+/** Only highlight and mount the visible lines of large patches. */
+function drawRows(rows: DiffRow[], language: ReturnType<typeof languageOf>, scroll: number): void {
+  const container = el('div', 'diff')
+  bodyEl.replaceChildren(container)
+  if (rows.length <= 500) {
+    container.innerHTML = rows.map(row => rowHtml(row, language)).join('')
+    bodyEl.scrollTop = scroll
     return
   }
-
-  const language = languageOf(doc.path)
-  const drawn = mark('  draw diff')
-  bodyEl.innerHTML = `<div class="diff">${rows.map(row => diffRowHtml(row, language)).join('')}</div>`
-  drawn(`${rows.length} rows`)
+  container.classList.add('virtual-diff')
+  container.style.height = `${rows.length * ROW_HEIGHT}px`
+  let longest = 0
+  for (const row of rows) longest = Math.max(longest, row.text.replace(/\t/g, '    ').length)
+  container.style.minWidth = `calc(${longest}ch + 130px)`
+  const windowEl = el('div', 'diff-window')
+  container.append(windowEl)
+  bodyEl.scrollTop = scroll
+  let frame = 0
+  let lastStart = -1
+  let lastEnd = -1
+  const paint = () => {
+    frame = 0
+    const start = Math.max(0, Math.floor(bodyEl.scrollTop / ROW_HEIGHT) - 15)
+    const end = Math.min(rows.length, Math.ceil((bodyEl.scrollTop + bodyEl.clientHeight) / ROW_HEIGHT) + 15)
+    if (start === lastStart && end === lastEnd) return
+    lastStart = start; lastEnd = end
+    windowEl.style.transform = `translateY(${start * ROW_HEIGHT}px)`
+    windowEl.innerHTML = rows.slice(start, end).map(row => rowHtml(row, language)).join('')
+  }
+  const schedule = () => { if (!frame) frame = requestAnimationFrame(paint) }
+  bodyEl.addEventListener('scroll', schedule, { passive: true })
+  const resize = new ResizeObserver(schedule)
+  resize.observe(bodyEl)
+  paint()
+  stopDrawing = () => {
+    cancelAnimationFrame(frame)
+    bodyEl.removeEventListener('scroll', schedule)
+    resize.disconnect()
+    stopDrawing = () => {}
+  }
 }
 
-function diffRowHtml(row: DiffRow, language: ReturnType<typeof languageOf>): string {
-  if (row.kind === 'hunk' || row.kind === 'meta') {
-    return (
-      `<div class="d-row d-${row.kind}"><span class="d-num"></span><span class="d-num"></span>` +
-      `<span class="d-text">${escapeHtml(row.text)}</span></div>`
-    )
-  }
+function rowHtml(row: DiffRow, language: ReturnType<typeof languageOf>): string {
+  const meta = row.kind === 'hunk' || row.kind === 'meta'
   const sign = row.kind === 'add' ? '+' : row.kind === 'del' ? '−' : ' '
-  return (
-    `<div class="d-row d-${row.kind}">` +
-    `<span class="d-num">${row.oldLine ?? ''}</span>` +
-    `<span class="d-num">${row.newLine ?? ''}</span>` +
-    `<span class="d-sign">${sign}</span>` +
-    `<span class="d-text">${highlight(row.text, language)}</span>` +
-    `</div>`
-  )
+  const text = meta || row.text.length > 2000 ? escapeHtml(row.text) : highlight(row.text, language)
+  return `<div class="d-row d-${row.kind}"><span class="d-num">${row.oldLine ?? ''}</span>` +
+    `<span class="d-num">${row.newLine ?? ''}</span><span class="d-sign">${sign}</span>` +
+    `<span class="d-text">${text}</span></div>`
 }
