@@ -83,6 +83,8 @@ list permanently — and `drop` to remove them again.
 
 ## Source control
 
+- **Navigation** — filter repositories, branches and changed paths with `/`; use J/K or the
+  diff toolbar to move between changes. Collapse repositories or show only dirty checkouts.
 - **Changes** — every repository has staged and working-tree changes, per-file and bulk
   stage/unstage actions, discard with confirmation, and a commit message box.
 - **History** — commit graphs with branches, tags, authors and adjustable depth.
@@ -92,7 +94,9 @@ list permanently — and `drop` to remove them again.
 
 The application is focused on Git. There is no file editor, project explorer or embedded
 terminal. Select a changed file to review its unified diff with line numbers and syntax
-colouring. Use Ctrl/Cmd+Enter in a commit message to commit staged changes.
+colouring. Use Ctrl/Cmd+Enter in a commit message to commit staged changes. Git operations show
+progress and errors beside their repository, and repeated clicks cannot start a second
+operation while one is running. The layout adapts to narrow windows.
 
 ## Performance
 

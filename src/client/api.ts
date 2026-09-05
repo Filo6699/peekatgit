@@ -30,8 +30,9 @@ const repoQuery = (repo: string, extra: Record<string, string> = {}): string =>
   new URLSearchParams({ repo, ...extra }).toString()
 
 export const api = {
-  workspace: (repos?: string[]): Promise<Workspace> => {
+  workspace: (repos?: string[], fresh = false): Promise<Workspace> => {
     const query = new URLSearchParams()
+    if (fresh) query.set('fresh', '1')
     if (repos) { query.set('partial', '1'); for (const id of repos) query.append('repo', id) }
     return getJson(`/api/workspace?${query}`)
   },
@@ -49,7 +50,6 @@ export const api = {
   },
 
 
-
   diff: (repo: string, file: string, staged: boolean, untracked: boolean, signal?: AbortSignal): Promise<string> =>
     fetch(
       `/api/diff?${repoQuery(repo, { path: file, staged: staged ? '1' : '0', untracked: untracked ? '1' : '0' })}`
@@ -58,7 +58,6 @@ export const api = {
       if (!response.ok) throw new Error(((await response.json()) as { error: string }).error)
       return response.text()
     }),
-
 
 
   worktrees: (repo: string): Promise<Worktree[]> => getJson(`/api/worktrees?${repoQuery(repo)}`),

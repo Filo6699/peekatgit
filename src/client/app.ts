@@ -7,7 +7,7 @@ import { renderSidebar } from './sidebar.ts'
 import { docRepo, hooks, state, visibleRepos } from './state.ts'
 import { refreshQueue } from './refresh.ts'
 import { mark } from './trace.ts'
-import { openDoc, refreshDoc } from './viewer.ts'
+import { navigateChange, openDoc, refreshDoc } from './viewer.ts'
 
 const ui = {
   workspaceName: byId('wsName'),
@@ -23,7 +23,7 @@ const ui = {
  */
 async function refreshNow(touched?: string[]): Promise<void> {
   const done = mark('refresh')
-  state.workspace = await api.workspace(touched)
+  state.workspace = await api.workspace(touched, touched === undefined && Boolean(state.workspace.root))
   for (const [id, report] of Object.entries(state.workspace.statuses ?? {})) {
     if (JSON.stringify(report) !== JSON.stringify(state.statuses[id])) state.statuses[id] = report
   }
@@ -31,6 +31,12 @@ async function refreshNow(touched?: string[]): Promise<void> {
   for (const id of Object.keys(state.statuses)) if (!known.has(id)) delete state.statuses[id]
   document.title = `${state.workspace.name} — PeekAtGit`
   ui.workspaceName.textContent = state.workspace.name
+  ui.workspaceName.title = state.workspace.root
+  const staged = state.workspace.repos.reduce((sum, repo) => sum + repo.staged, 0)
+  const changedCount = state.workspace.repos.reduce((sum, repo) => sum + repo.changes, 0)
+  byId('changeSummary').textContent = `${staged + changedCount} changes`
+  byId('statusSummary').textContent = `${staged} staged · ${changedCount} working tree`
+
 
   const hiddenCount = state.workspace.repos.filter(repo => repo.hidden).length
   ui.repoCount.textContent = `${state.workspace.repos.length - hiddenCount} repos`
@@ -57,7 +63,7 @@ const refresh = refreshQueue(async repos => {
 })
 function showError(error: unknown): void {
   const host = byId('appError')
-  host.textContent = (error as Error).message ?? String(error)
+  byId('errorText').textContent = (error as Error)?.message ?? String(error)
   host.hidden = false
 }
 hooks.refresh = refresh
@@ -77,7 +83,7 @@ ui.hiddenToggle.addEventListener('click', () => {
 const sidebar = byId('sidebar').parentElement as HTMLElement
 const grip = byId('grip')
 const savedWidth = Number(localStorage.getItem('peekatgit.width'))
-if (savedWidth >= 220) sidebar.style.width = `${savedWidth}px`
+if (savedWidth >= 290) sidebar.style.width = `${Math.min(720, savedWidth)}px`
 
 grip.addEventListener('pointerdown', event => {
   event.preventDefault()
@@ -85,7 +91,7 @@ grip.addEventListener('pointerdown', event => {
   grip.setPointerCapture(event.pointerId)
 
   const onMove = (move: PointerEvent) => {
-    const width = Math.min(720, Math.max(220, move.clientX))
+    const width = Math.min(720, Math.max(290, move.clientX))
     sidebar.style.width = `${width}px`
   }
   const onUp = () => {
@@ -103,10 +109,11 @@ function subscribe(): void {
   let connected = false
   source.addEventListener('open', () => {
     ui.pulse.classList.add('live')
+    byId('connection').textContent = 'Live updates'
     if (connected) void refresh()
     connected = true
   })
-  source.addEventListener('error', () => ui.pulse.classList.remove('live'))
+  source.addEventListener('error', () => { ui.pulse.classList.remove('live'); byId('connection').textContent = 'Reconnecting…' })
   source.addEventListener('message', event => {
     ui.pulse.classList.add('beat')
     setTimeout(() => ui.pulse.classList.remove('beat'), 250)
@@ -128,3 +135,46 @@ await refresh()
 // The remembered tab may be the one that owns the right-hand pane.
 if (state.tab === 'graph') showPane('graph')
 subscribe()
+
+const filter = byId<HTMLInputElement>('filter')
+filter.addEventListener('input', () => { state.filter = filter.value; renderSidebar() })
+byId('onlyDirty').addEventListener('click', () => {
+  state.onlyDirty = !state.onlyDirty
+  byId('onlyDirty').setAttribute('aria-pressed', String(state.onlyDirty))
+  renderSidebar()
+})
+byId('collapseAll').addEventListener('click', () => {
+  const repos = visibleRepos().filter(repo => !repo.hidden)
+  const collapsed = repos.every(repo => state.collapsed.has(repo.id))
+  for (const repo of repos) {
+    if (collapsed) state.collapsed.delete(repo.id)
+    else state.collapsed.add(repo.id)
+  }
+  byId('collapseAll').textContent = collapsed ? 'Collapse all' : 'Expand all'
+  renderSidebar()
+})
+byId('refresh').addEventListener('click', async () => {
+  const button = byId<HTMLButtonElement>('refresh')
+  button.disabled = true
+  try { await refresh() } finally { button.disabled = false }
+})
+byId('dismissError').addEventListener('click', () => { byId('appError').hidden = true })
+grip.addEventListener('keydown', event => {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+  event.preventDefault()
+  const width = Math.min(720, Math.max(290, sidebar.offsetWidth + (event.key === 'ArrowRight' ? 20 : -20)))
+  sidebar.style.width = `${width}px`
+  localStorage.setItem('peekatgit.width', String(width))
+})
+document.addEventListener('keydown', event => {
+  const target = event.target as HTMLElement
+  if (target.matches('input, textarea, select') || target.isContentEditable) {
+    if (event.key === 'Escape' && target === filter) { filter.value = ''; state.filter = ''; filter.blur(); renderSidebar() }
+    return
+  }
+  if (event.ctrlKey || event.metaKey || event.altKey) return
+  if (event.key === '/') { event.preventDefault(); filter.focus(); return }
+  if (state.tab === 'changes' && (event.key === 'j' || event.key === 'k')) {
+    event.preventDefault(); navigateChange(event.key === 'j' ? 1 : -1)
+  }
+})

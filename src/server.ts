@@ -174,6 +174,10 @@ const server = createServer(async (req, res) => {
   try {
     switch (url.pathname) {
       case '/api/workspace':
+        if (query.get('fresh') === '1') {
+          await workspace.scan()
+          for (const id of workspace.allRepoIds()) workspace.invalidate(id)
+        }
         return json(res, { ...(await workspace.describe(query.has('partial') ? query.getAll('repo') : undefined)), trace: TRACE })
 
       case '/api/status':

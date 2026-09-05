@@ -8,7 +8,7 @@ const TAB_KEY = 'peekatgit.tab'
 const savedTab = localStorage.getItem(TAB_KEY)
 
 export const state = {
-  /** Which sidebar tab is up — remembered, like the sidebar width and the dock. */
+  /** Which sidebar tab is up — remembered, like the sidebar width. */
   tab: (savedTab === 'graph' ? savedTab : 'changes') as Tab,
   workspace: { root: '', name: '', rootIsRepo: false, repos: [] } as Workspace,
   statuses: {} as Record<string, StatusReport>,
@@ -16,10 +16,11 @@ export const state = {
   errors: {} as Record<string, string>,
   doc: null as Doc | null,
   showHidden: false,
+  filter: '',
+  onlyDirty: false,
+  busy: new Map<string, string>(),
   /** Repos whose change lists are folded away. */
   collapsed: new Set<string>(),
-  /** Repos with a sync in flight; their button is spoken for until it lands. */
-  syncing: new Set<string>(),
   /** Repos whose worktree list is unfolded. */
   worktreesOpen: new Set<string>(),
 }
@@ -44,7 +45,7 @@ export const docKey = (doc: Doc | null): string => {
 
 /**
  * Every repository gets a colour it keeps: the spine down its block in the
- * sidebar, its name in the project tree, its name in the viewer header. Muted
+ * sidebar, its name in the viewer header. Muted
  * enough that eight of them on screen still read as one interface.
  */
 const IDENTITY = ['#d09a63', '#6fb0a6', '#ab8fc7', '#b9aa5f', '#7fa2d4', '#cd8496', '#94bd6c', '#c98d54']
@@ -55,22 +56,24 @@ export function repoColor(id: string): string {
   return IDENTITY[hash % IDENTITY.length]!
 }
 
-export const STATUS_LABEL: Record<string, string> = {
-  M: 'modified',
-  A: 'added',
-  D: 'deleted',
-  R: 'renamed',
-  C: 'copied',
-  U: 'conflicted',
-  T: 'type changed',
-  '?': 'untracked',
-}
-
 export const visibleRepos = () => state.workspace.repos.filter(repo => state.showHidden || !repo.hidden)
 
-export const formatSize = (bytes: number): string =>
-  bytes < 1024
-    ? `${bytes} B`
-    : bytes < 1024 * 1024
-      ? `${(bytes / 1024).toFixed(1)} KB`
-      : `${(bytes / 1024 / 1024).toFixed(1)} MB`
+
+export function matches(repo: { name: string; branch: string }, file = ''): boolean {
+  const query = state.filter.trim().toLowerCase()
+  return !query || `${repo.name} ${repo.branch} ${file}`.toLowerCase().includes(query)
+}
+
+export function changeDocs(): Doc[] {
+  const docs: Doc[] = []
+  for (const repo of visibleRepos()) {
+    if (repo.hidden) continue
+    const report = state.statuses[repo.id]
+    for (const staged of [true, false]) {
+      for (const entry of (staged ? report?.staged : report?.changes) ?? []) {
+        if (matches(repo, entry.path)) docs.push({ kind: 'diff', repo: repo.id, path: entry.path, staged, untracked: Boolean(entry.untracked), from: entry.from })
+      }
+    }
+  }
+  return docs
+}

@@ -1,569 +1,176 @@
-/*
- * PeekAtGit — visual language
- *
- * The instrument this tool borrows from is the diff gutter: a narrow column of
- * marks running down the left of every line. Here *every* row has one — repos,
- * files, tree entries, code lines — so the whole window reads as a single
- * ledger you scan down the left edge.
- *
- * Chrome is a small sans and stays out of the way. Everything that is data —
- * repo names, paths, branches, code — is monospace, because it is all read the
- * same way: by scanning for the character that differs.
- */
-
 :root {
-  /* Warm near-black; paper in a darkroom rather than a blue terminal. */
-  --ink: #131210;
-  --ink-1: #1a1815;
-  --ink-2: #23201a;
-  --rule: #332e26;
-
-  /* Three text levels, all kept above 4.5:1 — nothing here is decorative. */
-  --bone: #f2eee6;
-  --ash: #c0b7a6;
-  --dim: #948b7b;
-
-  /* Three status colours and one cool accent for "you are here". */
-  --moss: #a3cb6d;
-  --amber: #f0bd5c;
-  --rust: #ef8a6a;
-  --sky: #86c8de;
-
-  --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
-  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
-
-  --row: 23px;
-  --gut: 24px;
-  --topbar: 36px;
+  color-scheme: dark;
+  --ink: #101319; --ink-1: #171b23; --ink-2: #222936; --rule: #2a303d;
+  --bone: #e5eaf3; --ash: #b6c0d1; --dim: #8c98ac;
+  --moss: #84d5ac; --amber: #e5bd7c; --rust: #ee969e; --sky: #8db2ff;
+  --mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
-
 * { box-sizing: border-box; }
-
-html, body {
-  height: 100%;
-  margin: 0;
-  background: var(--ink);
-  color: var(--bone);
-  font: 12.5px/1.5 var(--mono);
-  overflow: hidden;
-  -webkit-font-smoothing: antialiased;
-}
-
-button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
-:focus-visible { outline: 1px solid var(--sky); outline-offset: -1px; }
-.spacer { flex: 1; }
-
-/* Chrome labels: the only sans in the app, and deliberately quiet. */
-.label {
-  font: 500 9.5px/1 var(--sans);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--dim);
-}
-
-/* ------------------------------------------------------------ topbar */
-.topbar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  height: var(--topbar);
-  padding: 0 14px;
-  background: var(--ink-1);
-  border-bottom: 1px solid var(--rule);
-  user-select: none;
-}
-
-.logo { font: 500 10px/1 var(--sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); }
-.ws-name { font-size: 13px; color: var(--bone); }
-.topbar .count { color: var(--dim); font-size: 11px; }
-
-.pulse {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--rule);
-  transition: background 0.2s, box-shadow 0.3s;
-}
-.pulse.live { background: var(--moss); }
-.pulse.beat { box-shadow: 0 0 0 4px rgba(163, 203, 109, 0.2); }
-
-.ghost { font-size: 11px; color: var(--ash); padding: 2px 7px; border-radius: 3px; }
-.ghost:hover { color: var(--bone); background: var(--ink-2); }
-
-/* ------------------------------------------------------------ layout */
-.layout { display: flex; height: calc(100% - var(--topbar)); }
-
-/* The sidebar floor is the darkest surface; repo blocks sit on top of it. */
-.side {
-  width: 340px;
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  background: var(--ink);
-}
-
-.tabs {
-  display: flex;
-  gap: 2px;
-  padding: 6px 8px 0;
-  border-bottom: 1px solid var(--rule);
-  flex: none;
-}
-
-.tab {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px 6px;
-  color: var(--dim);
-  font-size: 12px;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-}
-.tab:hover { color: var(--ash); }
-.tab.on { color: var(--bone); border-bottom-color: var(--sky); }
-.tab-n {
-  font-size: 10px;
-  color: var(--ink);
-  background: var(--dim);
-  border-radius: 7px;
-  padding: 0 6px;
-  font-variant-numeric: tabular-nums;
-}
-.tab.on .tab-n { background: var(--sky); }
-
-.sidebar {
-  flex: 1;
-  overflow: auto;
-  overscroll-behavior: contain;
-  padding: 8px 0 40vh;
-}
-
-/* A real handle: paths are long and every workspace is different. */
-.grip { width: 5px; flex: none; cursor: col-resize; background: var(--rule); }
-.grip:hover, .grip.dragging { background: var(--sky); }
-
-/* -------------------------------------------------------------- rows */
-.row {
-  display: flex;
-  align-items: center;
-  height: var(--row);
-  padding-right: 8px;
-  white-space: nowrap;
-  overflow: hidden;
-  cursor: pointer;
-  user-select: none;
-  position: relative;
-}
-.row:hover { background: #272219; }
-
-.row.active { background: #2c2720; }
-.row.active::before {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 2px;
-  background: var(--sky);
-}
-
-/* The gutter: one character wide, the same column everywhere. */
-.gut {
-  width: var(--gut);
-  flex: none;
-  text-align: center;
-  color: var(--dim);
-  font-size: 11.5px;
-}
-.g-mod { color: var(--amber); }
-.g-new { color: var(--moss); }
-.g-del { color: var(--rust); }
-.g-move { color: var(--sky); }
-.g-warn { color: var(--rust); font-weight: 600; }
-
-/* --------------------------------------------------------- repo rows */
-/*
- * Each repository is a block on its own: a raised surface, a gap of floor
- * beneath it, and a spine in the colour that repo keeps everywhere.
- */
-.repo {
-  --id: var(--ash);
-  background: var(--ink-1);
-  border-left: 3px solid var(--id);
-  margin: 0 0 8px 0;
-}
-.repo.is-hidden { opacity: 0.5; }
-
-.repo-row {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  height: 30px;
-  gap: 8px;
-  background: color-mix(in srgb, var(--id) 16%, #221e18);
-  border-bottom: 1px solid color-mix(in srgb, var(--id) 22%, var(--rule));
-}
-.repo-row:hover { background: color-mix(in srgb, var(--id) 20%, #262119); }
-.repo-row.quiet-row { cursor: default; }
-
-/* The name carries the repo's colour — it is the fastest thing to recognise. */
-.repo-name { color: var(--id); font-size: 13px; letter-spacing: 0.01em; }
-.quiet-row .repo-name { font-size: 12.5px; opacity: 0.72; }
-
-/* Clean repositories are parked together and stay out of the way. */
-.quiet { margin-top: 10px; }
-.quiet-label { padding: 0 0 6px 12px; }
-.quiet .repo { margin-bottom: 2px; background: transparent; }
-.quiet .repo-row { background: transparent; border-bottom: 0; }
-.quiet .repo-row:hover { background: var(--ink-1); }
-
-.repo-qual { color: var(--dim); font-size: 11px; }
-.repo-branch {
-  color: var(--dim);
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 140px;
-}
-/* The ahead/behind chip doubles as the Sync button. */
-.repo-sync {
-  color: var(--amber);
-  font-size: 11px;
-  opacity: 0.8;
-  padding: 0 3px;
-  border-radius: 3px;
-  font-variant-numeric: tabular-nums;
-}
-.repo-sync:hover:not(:disabled) { color: var(--bone); background: #3a3429; opacity: 1; }
-/* Nothing to move: offer it only once the row is under the pointer. */
-.repo-sync.idle { display: none; color: var(--dim); }
-.repo-row:hover .repo-sync.idle { display: inline-block; }
-.repo-sync.busy { color: var(--sky); opacity: 1; animation: spin 1s linear infinite; }
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-.repo-wt { color: var(--dim); font-size: 11px; padding: 0 3px; border-radius: 3px; }
-.repo-wt:hover { color: var(--sky); background: var(--ink); }
-.repo-flag { color: var(--sky); font-size: 9.5px; letter-spacing: 0.1em; font-family: var(--sans); }
-
-/* Tally and controls share the right edge; only one is visible at a time. */
-.tally { margin-left: auto; display: flex; gap: 8px; font-size: 11px; font-variant-numeric: tabular-nums; }
-.t-staged { color: var(--moss); font-weight: 400; }
-.t-changed { color: var(--amber); font-weight: 400; }
-.repo-row:hover .tally { display: none; }
-
-.ctl { margin-left: auto; display: none; gap: 1px; }
-.repo-row:hover .ctl { display: flex; }
-
-.act {
-  color: var(--dim);
-  padding: 0 5px;
-  border-radius: 3px;
-  font-size: 11px;
-  line-height: 19px;
-}
-.act:hover { color: var(--bone); background: #3a3429; }
-
-/* -------------------------------------------------------- file lists */
-.repo-body { padding-bottom: 8px; }
-
-/*
- * Staged and unstaged are two different places, not two labels. Each group is
- * a band in its own colour with the files indented under it, so the boundary
- * between them is visible from across the room.
- */
-.group { --tone: var(--ash); margin-top: 6px; }
-.grp-staged { --tone: var(--moss); }
-.grp-changed { --tone: var(--amber); }
-
-.sect {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  height: 21px;
-  padding: 0 8px 0 10px;
-  background: color-mix(in srgb, var(--tone) 11%, var(--ink-2));
-  border-top: 1px solid color-mix(in srgb, var(--tone) 24%, var(--rule));
-  border-bottom: 1px solid color-mix(in srgb, var(--tone) 16%, var(--rule));
-  user-select: none;
-}
-.sect-dot { width: 5px; height: 5px; flex: none; border-radius: 1px; background: var(--tone); }
-.sect-title { font-size: 10px; letter-spacing: 0.16em; color: var(--tone); }
-.sect .count {
-  font-size: 10px;
-  color: var(--tone);
-  opacity: 0.75;
-  font-variant-numeric: tabular-nums;
-}
-.sect .act { margin-left: auto; visibility: hidden; }
-.sect:hover .act { visibility: visible; }
-.sect .act:hover { color: var(--tone); }
-
-.files { list-style: none; margin: 0; padding: 2px 0; }
-
-/* The name never yields space to the path: it is what you are looking for. */
-.fname { flex: 0 0 auto; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-.row.file .fdir {
-  flex: 0 1 auto;
-  min-width: 0;
-  margin-left: 9px;
-  color: var(--dim);
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  direction: rtl;
-  text-align: left;
-}
-.row.stale .fname { color: var(--ash); }
-
-.row .actions { margin-left: auto; display: none; gap: 1px; padding-left: 8px; }
-.row:hover .actions { display: flex; }
-
-/* --------------------------------------------------------- worktrees */
-.wt {
-  list-style: none;
-  margin: 2px 0 6px 0;
-  padding: 0;
-  border-left: 1px solid var(--rule);
-  margin-left: calc(var(--gut) / 2);
-}
-.wt .row { cursor: default; padding-left: 6px; }
-.wt .row.linked { cursor: pointer; }
-.wt-branch { color: var(--ash); }
-.wt-path { color: var(--dim); font-size: 11px; margin-left: 8px; }
-.wt .current .wt-branch { color: var(--bone); }
-
-/* ------------------------------------------------------- commit box */
-.commit { padding: 6px 8px 4px var(--gut); display: flex; flex-direction: column; gap: 6px; }
-
-.commit textarea {
-  width: 100%;
-  resize: vertical;
-  font: 12.5px/1.5 var(--mono);
-  color: var(--bone);
-  background: var(--ink);
-  border: 1px solid var(--rule);
-  border-radius: 3px;
-  padding: 6px 8px;
-}
-.commit textarea::placeholder { color: var(--dim); }
-.commit textarea:focus { outline: none; border-color: var(--sky); }
-
-.commit button {
-  align-self: flex-start;
-  padding: 3px 12px;
-  border-radius: 3px;
-  border: 1px solid var(--moss);
-  color: var(--moss);
-  font-size: 11px;
-}
-.commit button:hover:not(:disabled) { background: rgba(163, 203, 109, 0.14); }
-.commit button:disabled { border-color: var(--rule); color: var(--dim); cursor: default; }
-
-.err {
-  margin: 4px 8px 4px var(--gut);
-  padding: 6px 8px;
-  border-left: 2px solid var(--rust);
-  background: rgba(239, 138, 106, 0.1);
-  color: #f0a184;
-  font-size: 11px;
-  white-space: pre-wrap;
-}
-
-.empty { padding: 8px 8px 8px var(--gut); color: var(--dim); font-size: 11.5px; }
-
-/* ------------------------------------------------------------ viewer */
-.viewer { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-
-.viewer-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  height: 34px;
-  padding: 0 14px;
-  border-bottom: 1px solid var(--rule);
-  background: var(--ink-1);
-  white-space: nowrap;
-  overflow: hidden;
-  flex: none;
-}
-.crumb { overflow: hidden; text-overflow: ellipsis; }
-.crumb .c-repo { color: var(--dim); }
-.crumb .c-dir { color: var(--ash); }
-.crumb .c-file { color: var(--bone); }
-.viewer-head .meta { color: var(--dim); font-size: 11px; }
-.viewer-head .m-add { color: var(--moss); }
-.viewer-head .m-del { color: var(--rust); }
-.viewer-head .act { align-self: center; border: 1px solid var(--rule); }
-
-.viewer-body { flex: 1; overflow: auto; }
-
-.blank { padding: 34px 16px; color: var(--dim); max-width: 62ch; }
-.blank p { margin: 0 0 8px; }
-.blank .hint { color: #7d7565; }
-
-/* -------------------------------------------------------------- code */
-.code { display: flex; line-height: 1.6; padding: 8px 0 40vh; min-width: max-content; }
-.code pre { margin: 0; }
-.ln {
-  position: sticky;
-  left: 0;
-  z-index: 1;
-  padding: 0 12px 0 14px;
-  text-align: right;
-  color: var(--dim);
-  background: var(--ink);
-  user-select: none;
-}
-.src { padding-right: 24px; white-space: pre; }
-
-/* -------------------------------------------------------------- diff */
-.diff { line-height: 1.6; padding-bottom: 40vh; min-width: max-content; }
-.d-row { display: flex; white-space: pre; }
-.d-num {
-  width: 44px;
-  flex: none;
-  padding-right: 10px;
-  text-align: right;
-  color: var(--dim);
-  user-select: none;
-}
-.d-sign { width: 18px; flex: none; text-align: center; color: var(--dim); user-select: none; }
-.d-text { padding-right: 24px; }
-
-.d-add { background: rgba(163, 203, 109, 0.13); }
-.d-add .d-sign { color: var(--moss); }
-.d-del { background: rgba(239, 138, 106, 0.13); }
-.d-del .d-sign { color: var(--rust); }
-
-.d-hunk, .d-meta { margin: 10px 0 2px; color: var(--dim); background: var(--ink-1); }
-.d-hunk .d-text, .d-meta .d-text { color: var(--dim); font-size: 11.5px; }
-
-/* ------------------------------------------------------------ tokens */
-.tok-c { color: #8b8272; font-style: italic; }
-.tok-s { color: #c8d68c; }
-.tok-n { color: #efab6e; }
-.tok-k { color: #e0aad9; }
-.tok-f { color: #9fd2e0; }
-.tok-t { color: #eccb8e; }
-
-/* ------------------------------------------------------------- graph */
-/*
- * Every repository at once, each one a column of its own history: newest at
- * the top, lanes on the left, the message on the right. The columns are
- * centred as a group, so two repos read as a pair rather than as a row that
- * ran out of things to say.
- */
-.graph {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--ink);
-}
-.graph[hidden] { display: none; }
-
-.graph-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 34px;
-  padding: 0 8px 0 14px;
-  flex: none;
-  background: var(--ink-1);
-  border-bottom: 1px solid var(--rule);
-  user-select: none;
-}
-.graph-head .meta { color: var(--dim); font-size: 11px; }
-.graph-head select { border: 1px solid var(--rule); background: var(--ink-1); }
-
-.graph-body {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  display: flex;
-  flex-wrap: wrap; /* forty repos are a wall, not a row */
-  /* `safe` so a wide column never gets centred off the left edge, out of reach. */
-  justify-content: safe center;
-  align-content: flex-start;
-  align-items: flex-start;
-  gap: 14px;
-  padding: 14px;
-}
-.graph-body > .blank { padding: 34px 16px; }
-
-.gcol {
-  --id: var(--ash);
-  flex: 1 1 460px;
-  min-width: 300px;
-  max-width: 720px;
-  background: var(--ink-1);
-  border: 1px solid var(--rule);
-  border-top: 2px solid var(--id);
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.ghead {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 5px 10px;
-  background: color-mix(in srgb, var(--id) 14%, #221e18);
-  border-bottom: 1px solid color-mix(in srgb, var(--id) 22%, var(--rule));
-}
-.ghead .gdot { width: 6px; height: 6px; border-radius: 50%; background: var(--id); align-self: center; }
-.gname { color: var(--id); font-size: 13px; }
-.gbranch { color: var(--dim); font-size: 11px; }
-.gcount { color: var(--dim); font-size: 11px; }
-
-/* The lines are one SVG behind the rows; the rows just leave room for them. */
-/* A long history scrolls inside its own card, so one busy repo cannot push
-   every other one off the screen. */
-.gbody { position: relative; padding: 4px 0 6px; max-height: 62vh; overflow: auto; }
-.glines { position: absolute; top: 4px; left: 0; overflow: visible; }
-.glines path { fill: none; stroke-width: 2; stroke-linecap: round; }
-.glines circle { stroke: var(--ink-1); stroke-width: 1.5; }
-.glines circle.merge { stroke: var(--ink); }
-
-.grow {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  height: 22px;
-  padding-right: 10px;
-  white-space: nowrap;
-  overflow: hidden;
-}
-.grow:hover { background: var(--ink-2); }
-.gsubject { color: var(--bone); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-/* The name and the age never give way; the subject is what gets clipped. */
-.gwho { flex: none; color: var(--dim); font-size: 11px; max-width: 16ch; overflow: hidden; text-overflow: ellipsis; }
-.gage { flex: none; color: var(--dim); font-size: 11px; min-width: 4ch; text-align: right; }
-
-.gref {
-  flex: none;
-  font-size: 10.5px;
-  padding: 0 5px;
-  border-radius: 8px;
-  color: var(--amber);
-  border: 1px solid color-mix(in srgb, var(--amber) 40%, transparent);
-}
-.gref.head { color: var(--sky); border-color: color-mix(in srgb, var(--sky) 45%, transparent); }
-
-/* The graph tab's sidebar: the same repos, as a table of contents. */
-.glist-row { --id: var(--ash); gap: 7px; cursor: pointer; }
-.glist-row .gdot-cell { color: var(--id); }
-.glist-row .count { color: var(--dim); font-size: 11px; padding-right: 8px; }
-
-
 [hidden] { display: none !important; }
-
-.diff { line-height: 22px; tab-size: 4; }
-.d-row { height: 22px; }
-.d-hunk, .d-meta { margin: 0; }
+html, body { height: 100%; margin: 0; overflow: hidden; background: var(--ink); color: var(--bone); font: 13px/1.5 var(--sans); }
+body { display: flex; flex-direction: column; }
+button, input, textarea, select { font: inherit; color: inherit; }
+button { border: 0; background: none; cursor: pointer; }
+button:disabled { cursor: default; opacity: .45; }
+button:not(:disabled):hover { color: #fff; }
+:focus-visible { outline: 2px solid var(--sky); outline-offset: -2px; }
+::selection { background: #385786; }
+* { scrollbar-width: thin; scrollbar-color: #414b5d transparent; }
+.spacer { flex: 1; }
+.label { color: var(--dim); font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .1em; }
+.hint, .meta { color: var(--dim); font-size: 11px; }
+.count { color: var(--dim); font: 11px var(--mono); }
+kbd { display: inline-flex; justify-content: center; align-items: center; min-width: 20px; height: 21px; padding: 0 5px; border: 1px solid var(--rule); border-radius: 4px; color: var(--ash); font: 11px var(--mono); background: var(--ink-1); }
+.ghost, .act { padding: 5px 8px; border-radius: 5px; color: var(--ash); font-size: 11px; white-space: nowrap; }
+.ghost:not(:disabled):hover, .act:not(:disabled):hover { background: var(--ink-2); }
+.primary { padding: 6px 12px; border-radius: 5px; background: #86adff; color: #111b2d; font-weight: 650; font-size: 12px; }
+.primary:not(:disabled):hover { background: #a6c3ff; color: #111b2d; }
+.topbar { height: 58px; flex: none; display: flex; align-items: center; gap: 14px; padding: 0 22px; background: #161a22; border-bottom: 1px solid var(--rule); }
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand-mark { display: grid; place-items: center; width: 29px; height: 29px; background: #8db2ff; border-radius: 7px; color: #141e32; font: bold 25px var(--mono); }
+.logo { font-size: 15px; font-weight: 700; letter-spacing: -.4px; }
+.top-separator { height: 20px; width: 1px; background: var(--rule); margin: 0 3px; }
+.ws-name { color: var(--ash); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-count { padding: 3px 8px; border: 1px solid var(--rule); border-radius: 5px; white-space: nowrap; }
+.layout { display: flex; flex: 1; min-height: 0; }
+.side { width: 430px; min-width: 290px; max-width: 60vw; flex: none; display: flex; flex-direction: column; background: #14181f; }
+.side-title { display: flex; justify-content: space-between; align-items: center; padding: 21px 20px 15px; }
+.tabs { display: flex; gap: 22px; padding: 0 20px; border-bottom: 1px solid var(--rule); }
+.tab { height: 41px; padding: 0 0 12px; display: flex; align-items: center; gap: 8px; color: var(--dim); font-weight: 600; border-bottom: 2px solid transparent; }
+.tab.on { color: var(--bone); border-bottom-color: var(--sky); }
+.tab-n { padding: 1px 6px; border-radius: 5px; background: var(--ink-2); color: var(--ash); font: 10px/16px var(--mono); }
+.filter-bar { padding: 16px 14px 8px; }
+.search { height: 35px; display: flex; align-items: center; gap: 9px; padding: 0 9px; border: 1px solid var(--rule); border-radius: 6px; background: var(--ink); color: var(--dim); }
+.search > span { font-size: 23px; }
+.search:focus-within { border-color: var(--sky); }
+.search input { background: none; border: 0; outline: 0; width: 100%; min-width: 0; font-size: 12px; }
+.search input::placeholder { color: var(--dim); }
+.search kbd { height: 18px; min-width: 17px; }
+.filter-options { display: flex; align-items: center; margin: 7px 0 0; }
+.filter-options .ghost { padding: 4px 5px; font-size: 10px; color: var(--dim); }
+.filter-options button[aria-pressed="true"] { color: var(--sky); background: #253148; }
+.sidebar { overflow: auto; flex: 1; min-height: 0; padding: 0 12px 18px; }
+.grip { flex: none; width: 5px; background: var(--rule); border-right: 3px solid var(--ink); cursor: col-resize; touch-action: none; }
+.grip:hover, .grip.dragging { background: var(--sky); }
+.repo { margin: 8px 0 12px; border: 1px solid var(--rule); border-radius: 8px; background: var(--ink-1); }
+.repo.is-hidden { opacity: .6; }
+.repo-header { padding: 10px 10px 7px; }
+.repo-row { display: flex; align-items: center; gap: 7px; min-height: 25px; }
+.repo-toggle { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1; padding: 0; text-align: left; }
+.chevron { width: 13px; color: var(--dim); font-size: 17px; }
+.repo-name { font-weight: 650; font-size: 13px; color: var(--bone); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repo-toggle .repo-name { color: var(--id); }
+.repo-qual { color: var(--dim); font-size: 10px; overflow: hidden; text-overflow: ellipsis; }
+.repo-count { padding: 1px 6px; color: var(--ash); border-radius: 4px; background: var(--ink-2); font: 10px/17px var(--mono); }
+.repo-count.is-clean { color: var(--dim); background: none; font: 10px var(--sans); }
+.repo-flag { color: var(--dim); font-size: 9px; }
+.repo-info { padding-left: 21px; min-height: 27px; display: flex; align-items: center; gap: 6px; }
+.branch-icon { color: var(--dim); font: 16px var(--mono); }
+.repo-branch { color: var(--dim); font: 11px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repo-info .act { font-size: 10px; padding: 2px 6px; color: var(--dim); }
+.operation-state { color: var(--sky); font-size: 10px; }
+.repo-menu { position: relative; }
+.repo-menu summary { list-style: none; cursor: pointer; color: var(--dim); padding: 0 5px; font-weight: 700; }
+.repo-menu summary::-webkit-details-marker { display: none; }
+.repo-options { position: absolute; z-index: 5; right: 0; top: 25px; min-width: 165px; padding: 5px; background: #222935; border: 1px solid #3a4659; box-shadow: 0 10px 28px #0006; border-radius: 6px; }
+.repo-options .act { display: block; width: 100%; text-align: left; }
+.group { padding-bottom: 7px; }
+.sect { display: flex; align-items: center; gap: 7px; padding: 7px 10px 6px 13px; border-top: 1px solid var(--rule); }
+.sect .label { font-size: 9px; letter-spacing: .07em; }
+.sect .act { font-size: 10px; padding: 3px 5px; }
+.sect-dot { height: 5px; width: 5px; border-radius: 50%; background: var(--amber); }
+.grp-staged .sect-dot { background: var(--moss); }
+.grp-staged .sect .label { color: var(--moss); }
+.files, .wt { padding: 0; margin: 0; list-style: none; }
+.row { display: flex; align-items: center; min-height: 32px; }
+.file { padding: 0 7px 0 3px; border-left: 2px solid transparent; }
+.file:hover { background: #202733; }
+.file.active { background: #23334b; border-left-color: var(--sky); }
+.file-open { display: flex; align-items: center; min-width: 0; flex: 1; height: 32px; padding: 0; text-align: left; }
+.gut { flex: none; width: 27px; text-align: center; color: var(--dim); font: 10px var(--mono); }
+.g-mod { color: var(--amber); } .g-new { color: var(--moss); } .g-del, .g-warn { color: var(--rust); } .g-move { color: var(--sky); }
+.fname { color: var(--ash); font: 12px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.active .fname { color: #eef4ff; }
+.fdir { color: var(--dim); padding-left: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 15px; font: 10px var(--mono); }
+.actions { display: flex; flex: none; opacity: 0; }
+.file:hover .actions, .file:focus-within .actions, .file.active .actions { opacity: 1; }
+.actions .act { width: 25px; height: 25px; padding: 0; font: 17px var(--mono); }
+.act.danger:hover { color: var(--rust); }
+.commit { margin: 0 12px 12px; }
+.commit textarea { width: 100%; display: block; resize: vertical; min-height: 62px; max-height: 160px; padding: 9px 10px; background: var(--ink); border: 1px solid #343d4e; border-radius: 6px; font-size: 12px; line-height: 1.5; }
+.commit textarea::placeholder { color: var(--dim); }
+.commit-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; }
+.commit-footer .hint { font-size: 10px; }
+.wt { margin: 0 10px 10px; }
+.wt-branch { color: var(--ash); font: 11px var(--mono); }
+.err { color: var(--rust); font: 11px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 12px 12px; }
+.empty { color: var(--dim); text-align: center; padding: 40px 20px; }
+.viewer, .graph { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.viewer-head, .graph-head { min-height: 58px; display: flex; align-items: center; gap: 12px; padding: 12px 22px; border-bottom: 1px solid var(--rule); flex: none; flex-wrap: wrap; }
+.crumb { display: flex; gap: 3px; min-width: 0; font: 12px var(--mono); overflow: hidden; }
+.c-repo { flex: none; }
+.c-file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--bone); }
+.viewer-head .meta { white-space: nowrap; font: 10px var(--mono); }
+.viewer-head .act { border: 1px solid var(--rule); }
+.m-add { color: var(--moss); } .m-del { color: var(--rust); }
+.viewer-body { overflow: auto; flex: 1; min-height: 0; }
+.blank { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 240px; padding: 40px; color: var(--dim); text-align: center; }
+.welcome { height: 100%; padding-bottom: 100px; }
+.welcome-icon { display: grid; place-items: center; width: 64px; height: 64px; border: 1px solid var(--rule); border-radius: 18px; color: var(--sky); background: #191f2a; font: 44px var(--mono); margin-bottom: 16px; }
+.welcome-title { margin: 0 0 4px; color: var(--bone); font-size: 23px; font-weight: 600; letter-spacing: -.7px; }
+.welcome p:not(.welcome-title) { line-height: 1.8; }
+.welcome-keys { display: flex; gap: 22px; margin-top: 18px; font-size: 11px; }
+.welcome-keys kbd { margin-right: 4px; }
+.diff { font: 12px/22px var(--mono); min-width: max-content; padding-bottom: 35vh; tab-size: 4; }
+.d-row { display: flex; height: 22px; white-space: pre; }
+.d-num { width: 48px; flex: none; padding-right: 12px; text-align: right; color: #748299; user-select: none; }
+.d-sign { width: 22px; flex: none; text-align: center; color: var(--dim); user-select: none; }
+.d-text { padding-right: 30px; }
+.d-add { background: #162d26; } .d-add .d-sign { color: var(--moss); }
+.d-del { background: #322127; } .d-del .d-sign { color: var(--rust); }
+.d-hunk, .d-meta { background: #1a2230; color: #93a8c8; }
+.d-hunk .d-text, .d-meta .d-text { font-size: 11px; }
 .virtual-diff { position: relative; padding: 0; }
 .diff-window { position: absolute; top: 0; left: 0; right: 0; }
-.app-error { position: fixed; z-index: 10; bottom: 12px; right: 12px; max-width: 600px; padding: 12px; background: var(--ink-2); border: 1px solid var(--rust); }
+.tok-c { color: #8b99ae; font-style: italic; } .tok-s { color: #b2d9b0; } .tok-n { color: #e5bd7c; }
+.tok-k { color: #c5a4ea; } .tok-f { color: #91c6e4; } .tok-t { color: #d4c08a; }
+.statusbar { display: flex; align-items: center; gap: 7px; flex: none; height: 29px; padding: 0 16px; background: #171b23; border-top: 1px solid var(--rule); color: var(--dim); font-size: 10px; }
+.pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
+.pulse.live { background: var(--moss); } .pulse.beat { box-shadow: 0 0 0 3px #84d5ac22; }
+.status-divider { width: 1px; height: 10px; background: var(--rule); margin: 0 5px; }
+.app-error { position: fixed; z-index: 20; right: 18px; bottom: 42px; max-width: min(600px, 90vw); display: flex; align-items: start; gap: 16px; padding: 14px 16px; color: var(--rust); border: 1px solid #6c444f; border-radius: 8px; background: #292028; box-shadow: 0 8px 25px #0005; }
+#errorText { white-space: pre-wrap; overflow-wrap: anywhere; }
+#dismissError { color: var(--rust); padding: 0; font-size: 20px; }
+.viewer-title { font-weight: 600; }
+.graph-head select { font-size: 11px; border: 1px solid var(--rule); border-radius: 5px; background: var(--ink-1); padding: 5px; }
+.graph-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-wrap: wrap; align-content: flex-start; align-items: flex-start; gap: 18px; padding: 22px; }
+.gcol { flex: 1 1 450px; min-width: 280px; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; background: var(--ink-1); }
+.ghead { display: flex; align-items: center; gap: 8px; padding: 13px 15px; border-bottom: 1px solid var(--rule); }
+.gdot { height: 6px; width: 6px; background: var(--id); border-radius: 50%; }
+.gname { font-weight: 600; color: var(--id); }
+.gbranch, .gcount { color: var(--dim); font: 10px var(--mono); }
+.gbody { position: relative; padding: 10px 0; max-height: 65vh; overflow: auto; }
+.glines { position: absolute; top: 10px; left: 0; overflow: visible; }
+.glines path { fill: none; stroke-width: 1.5; stroke-linecap: round; }
+.glines circle { stroke: var(--ink-1); stroke-width: 1.5; }
+.grow { display: flex; align-items: center; gap: 8px; height: 30px; padding-right: 12px; white-space: nowrap; overflow: hidden; }
+.grow:hover { background: var(--ink-2); }
+.gsubject { color: var(--bone); overflow: hidden; text-overflow: ellipsis; min-width: 0; font-size: 12px; }
+.gwho, .gage { color: var(--dim); font-size: 10px; flex: none; }
+.gwho { max-width: 12ch; overflow: hidden; text-overflow: ellipsis; }
+.gref { flex: none; font: 9px var(--mono); padding: 2px 5px; border: 1px solid #5b5140; color: var(--amber); border-radius: 4px; }
+.gref.head { color: var(--sky); border-color: #3b5077; }
+.glist-row { width: 100%; min-height: 42px; padding: 0 10px; border-radius: 6px; text-align: left; }
+.glist-row:hover { background: var(--ink-2); }
+.gdot-cell { color: var(--id); }
+.list-label { padding: 15px 12px 8px; }
+@media (max-width: 950px) { .side { width: 350px; } .viewer-head, .graph-head { padding: 12px; gap: 8px; } .gwho { display: none; } .topbar { padding: 0 14px; } }
+@media (max-width: 640px) {
+  .topbar { height: 48px; gap: 9px; } .logo { font-size: 13px; } .workspace-count, .top-separator, .topbar #refresh span { display: none; }
+  .layout { flex-direction: column; } .side { width: 100% !important; max-width: none; height: 46%; min-width: 0; } .side-title { padding: 10px 15px 4px; }
+  .tabs { padding: 0 15px; } .tab { height: 32px; padding-bottom: 5px; } .filter-bar { padding: 8px 12px 0; }
+  .grip { width: 100%; height: 1px; border: 0; } .viewer, .graph { border-top: 1px solid var(--rule); } .welcome { padding: 20px; }
+  .welcome-icon { display: none; } .welcome-title { font-size: 18px; } .welcome-keys { display: none; } .statusbar .hint { display: none; }
+}
+@media (hover: none) { .actions { opacity: 1; } }

@@ -3,51 +3,51 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
     <title>PeekAtGit</title>
     <link rel="stylesheet" href="/style.css" />
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%23131210'/><rect x='4' y='3' width='2' height='10' fill='%23a3cb6d'/><rect x='8' y='3' width='2' height='10' fill='%23f0bd5c'/></svg>" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%236c9cff'/><path d='M11 9v14m10-14v4c0 5-10 1-10 7' fill='none' stroke='%230b1020' stroke-width='2.5'/></svg>" />
   </head>
   <body>
     <header class="topbar">
-      <span class="logo">peekatgit</span>
-      <span class="ws-name" id="wsName"></span>
-      <span class="count" id="repoCount"></span>
+      <div class="brand"><span class="brand-mark" aria-hidden="true">⑂</span><span class="logo">PeekAtGit</span></div>
+      <span class="top-separator"></span>
+      <span class="ws-name" id="wsName">Workspace</span>
+      <span class="count workspace-count" id="repoCount"></span>
       <span class="spacer"></span>
       <button class="ghost" id="toggleHidden" hidden></button>
-      <span class="pulse" id="pulse" title="Watching for changes"></span>
+      <button class="ghost" id="refresh" title="Refresh repositories">↻ <span>Refresh</span></button>
     </header>
 
-    <div id="appError" class="err app-error" role="alert" hidden></div>
     <main class="layout">
-      <aside class="side">
-        <nav class="tabs" id="tabs"></nav>
+      <aside class="side" aria-label="Source control">
+        <div class="side-title"><span class="label">Source control</span><span class="hint" id="changeSummary"></span></div>
+        <nav class="tabs" id="tabs" aria-label="Views"></nav>
+        <div class="filter-bar">
+          <label class="search"><span aria-hidden="true">⌕</span><input id="filter" type="search" placeholder="Filter repositories, branches, files…" aria-label="Filter repositories, branches and changed files" autocomplete="off" /><kbd>/</kbd></label>
+          <div class="filter-options"><button class="ghost" id="onlyDirty" aria-pressed="false">Changes only</button><span class="spacer"></span><button class="ghost" id="collapseAll">Collapse all</button></div>
+        </div>
         <div class="sidebar" id="sidebar"></div>
       </aside>
-      <div class="grip" id="grip" title="Drag to resize"></div>
-
-      <section class="viewer">
-        <div class="viewer-head" id="viewerHead"></div>
-        <div class="viewer-body" id="viewerBody">
-          <div class="blank">
-            <p>Pick a change from any repository on the left.</p>
-            <p class="hint">Review changes, prepare a commit, or explore your Git history.</p>
+      <div class="grip" id="grip" title="Drag to resize" role="separator" aria-label="Sidebar width" aria-orientation="vertical" tabindex="0"></div>
+      <section class="viewer" aria-label="Diff viewer">
+        <div class="viewer-head" id="viewerHead"><span class="label">Change preview</span></div>
+        <div class="viewer-body" id="viewerBody" tabindex="0" aria-label="Diff content">
+          <div class="blank welcome">
+            <span class="welcome-icon" aria-hidden="true">⑂</span>
+            <p class="welcome-title">Your changes, in focus.</p>
+            <p>Select a file to review its diff.<br />Stage what is ready, then make your next commit.</p>
+            <div class="welcome-keys"><span><kbd>/</kbd> Find a change</span><span><kbd>J</kbd> <kbd>K</kbd> Next / previous</span></div>
           </div>
         </div>
       </section>
-
-      <section class="graph" id="graph" hidden>
-        <div class="graph-head">
-          <span class="label">graph</span>
-          <span class="meta" id="graphMeta"></span>
-          <span class="spacer"></span>
-          <select class="ghost" id="graphDepth" title="How far back each repository is drawn"></select>
-          <button class="ghost" id="graphReload" title="Re-read the log">reload</button>
-        </div>
+      <section class="graph" id="graph" aria-label="Commit history" hidden>
+        <div class="graph-head"><span class="viewer-title">Commit history</span><span class="meta" id="graphMeta"></span><span class="spacer"></span><select id="graphDepth" aria-label="History depth"></select><button class="ghost" id="graphReload">↻ Reload</button></div>
         <div class="graph-body" id="graphBody"></div>
       </section>
-
     </main>
-
+    <footer class="statusbar"><span class="pulse" id="pulse"></span><span id="connection">Connecting…</span><span class="status-divider"></span><span id="statusSummary">Reading repositories…</span><span class="spacer"></span><span class="hint">Local Git · Source control</span></footer>
+    <div id="appError" class="app-error" role="alert" hidden><span id="errorText"></span><button id="dismissError" aria-label="Dismiss error">×</button></div>
     <script type="module" src="/app.js"></script>
   </body>
 </html>

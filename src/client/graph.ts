@@ -14,7 +14,7 @@ import { hooks, repoColor, state, visibleRepos } from './state.ts'
 import { refreshQueue } from './refresh.ts'
 import { mark } from './trace.ts'
 
-const ROW = 22
+const ROW = 30
 const LANE = 13
 const PAD = 11
 const DOT = 3.6
