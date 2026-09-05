@@ -13,7 +13,7 @@ import { readdir, readFile, watch } from 'node:fs/promises'
 import path from 'node:path'
 import type { ServerResponse } from 'node:http'
 import type { ChangeEvent } from '../shared/types.ts'
-import { pollSignature } from './git.ts'
+import { liveSignature } from './git.ts'
 import { invalidate, scan, visibleRepoIds, workspaceRoot } from './workspace.ts'
 
 const MAX_WATCHERS = 3
@@ -148,33 +148,33 @@ function watchDir(repoId: string, dir: string, controller: AbortController, watc
 let cursor = 0
 let polling = false
 
-/** Slow round-robin sweep over everything the watchers do not cover. */
+/** A bounded sweep also covers HEAD changes and linked worktrees missed by directory events. */
 async function poll(): Promise<void> {
   if (polling || !clients.size) return
   polling = true
   try {
-  const ids = await visibleRepoIds()
-  const visible = new Set(ids)
-  for (const [id, controller] of watchers) {
-    if (!visible.has(id)) { controller.abort(); watchers.delete(id) }
-  }
-  for (const id of signatures.keys()) if (!visible.has(id)) signatures.delete(id)
-  if (!ids.length) return
-  if (cursor >= ids.length) cursor = 0
-  const batch = ids.slice(cursor, cursor + POLL_BATCH)
-  cursor = cursor + POLL_BATCH >= ids.length ? 0 : cursor + POLL_BATCH
-
-  for (const id of batch) {
-    try {
-      const signature = await pollSignature(id)
-      if (signatures.get(id) !== signature) {
-        if (signatures.has(id)) notify(id)
-        signatures.set(id, signature)
-      }
-    } catch {
-      // Repo vanished; the next rescan will drop it.
+    const ids = await visibleRepoIds()
+    const visible = new Set(ids)
+    for (const [id, controller] of watchers) {
+      if (!visible.has(id)) { controller.abort(); watchers.delete(id) }
     }
-  }
+    for (const id of signatures.keys()) if (!visible.has(id)) signatures.delete(id)
+    if (!ids.length) return
+    if (cursor >= ids.length) cursor = 0
+    const batch = ids.slice(cursor, cursor + POLL_BATCH)
+    cursor = cursor + POLL_BATCH >= ids.length ? 0 : cursor + POLL_BATCH
+
+    for (const id of batch) {
+      try {
+        const signature = await liveSignature(id)
+        if (signatures.get(id) !== signature) {
+          if (signatures.has(id)) notify(id)
+          signatures.set(id, signature)
+        }
+      } catch {
+        // Repo vanished; the next rescan will drop it.
+      }
+    }
   } finally { polling = false }
 }
 

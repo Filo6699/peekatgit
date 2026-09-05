@@ -105,6 +105,10 @@ export const rawStatus = (repo: string): Promise<string> =>
 export const pollSignature = (repo: string): Promise<string> =>
   git(repo, ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '-b', '--untracked-files=all'])
 
+/** Version 2 includes HEAD's object id, so clean commits and amendments trigger history refreshes. */
+export const liveSignature = (repo: string): Promise<string> =>
+  git(repo, ['--no-optional-locks', 'status', '--porcelain=v2', '-z', '--branch', '--untracked-files=all'])
+
 /** `git status --porcelain=v1 -z`: NUL-separated records; renames carry a second path. */
 export function parseStatus(raw: string): StatusReport {
   const records = raw.split('\0')

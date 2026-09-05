@@ -7,6 +7,7 @@ import { after, describe, test } from 'node:test'
 import {
   diff,
   hasHead,
+  liveSignature,
   headAndStatus,
   parseBranchHeader,
   parseStatus,
@@ -143,6 +144,23 @@ describe('against a real repository', () => {
 
   test('toplevel returns null outside a checkout', async () => {
     assert.equal(await toplevel(await tempDir()), null)
+  })
+
+  test('live signatures detect clean commits and changes to a linked worktree HEAD', async () => {
+    const repo = await makeRepo(path.join(await tempDir(), 'history'))
+    await write(repo, 'a.txt', 'one\n')
+    await commitAll(repo, 'first')
+    const before = await liveSignature(repo)
+    await git(repo, 'commit', '--allow-empty', '-qm', 'empty commit')
+    const after = await liveSignature(repo)
+    assert.notEqual(after, before)
+    assert.deepEqual(await status(repo), { staged: [], changes: [] })
+    const linked = path.join(await tempDir(), 'linked')
+    await git(repo, 'worktree', 'add', '-q', '-b', 'feature', linked)
+    const linkedBefore = await liveSignature(linked)
+    await git(linked, 'commit', '--allow-empty', '-qm', 'worktree commit')
+    assert.notEqual(await liveSignature(linked), linkedBefore)
+    assert.equal(await liveSignature(repo), after, 'the main checkout did not move')
   })
 
   test('diff reports tracked edits and untracked files alike', async () => {
