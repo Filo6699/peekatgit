@@ -225,7 +225,25 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   text-overflow: ellipsis;
   max-width: 140px;
 }
-.repo-sync { color: var(--amber); font-size: 11px; opacity: 0.8; }
+/* The ahead/behind chip doubles as the Sync button. */
+.repo-sync {
+  color: var(--amber);
+  font-size: 11px;
+  opacity: 0.8;
+  padding: 0 3px;
+  border-radius: 3px;
+  font-variant-numeric: tabular-nums;
+}
+.repo-sync:hover:not(:disabled) { color: var(--bone); background: #3a3429; opacity: 1; }
+/* Nothing to move: offer it only once the row is under the pointer. */
+.repo-sync.idle { display: none; color: var(--dim); }
+.repo-row:hover .repo-sync.idle { display: inline-block; }
+.repo-sync.busy { color: var(--sky); opacity: 1; animation: spin 1s linear infinite; }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 .repo-wt { color: var(--dim); font-size: 11px; padding: 0 3px; border-radius: 3px; }
 .repo-wt:hover { color: var(--sky); background: var(--ink); }
 .repo-flag { color: var(--sky); font-size: 9.5px; letter-spacing: 0.1em; font-family: var(--sans); }
@@ -251,31 +269,39 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 /* -------------------------------------------------------- file lists */
 .repo-body { padding-bottom: 8px; }
 
+/*
+ * Staged and unstaged are two different places, not two labels. Each group is
+ * a band in its own colour with the files indented under it, so the boundary
+ * between them is visible from across the room.
+ */
+.group { --tone: var(--ash); margin-top: 6px; }
+.grp-staged { --tone: var(--moss); }
+.grp-changed { --tone: var(--amber); }
+
 .sect {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 9px 8px 3px var(--gut);
+  gap: 7px;
+  height: 21px;
+  padding: 0 8px 0 10px;
+  background: color-mix(in srgb, var(--tone) 11%, var(--ink-2));
+  border-top: 1px solid color-mix(in srgb, var(--tone) 24%, var(--rule));
+  border-bottom: 1px solid color-mix(in srgb, var(--tone) 16%, var(--rule));
+  user-select: none;
 }
-.sect .count { font-size: 10px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.sect-dot { width: 5px; height: 5px; flex: none; border-radius: 1px; background: var(--tone); }
+.sect-title { font-size: 10px; letter-spacing: 0.16em; color: var(--tone); }
+.sect .count {
+  font-size: 10px;
+  color: var(--tone);
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
 .sect .act { margin-left: auto; visibility: hidden; }
 .sect:hover .act { visibility: visible; }
+.sect .act:hover { color: var(--tone); }
 
-.files { list-style: none; margin: 0; padding: 0; }
-
-/* Files that share a directory are gathered under it rather than repeating it. */
-.dirhead {
-  padding: 6px 8px 0 calc(var(--gut) + 2px);
-  white-space: nowrap;
-  color: var(--dim);
-  font-size: 11px;
-  direction: rtl;
-  text-align: left;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: default;
-}
-.dirhead > span { direction: ltr; unicode-bidi: bidi-override; }
+.files { list-style: none; margin: 0; padding: 2px 0; }
 
 /* The name never yields space to the path: it is what you are looking for. */
 .fname { flex: 0 0 auto; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
@@ -294,17 +320,6 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 
 .row .actions { margin-left: auto; display: none; gap: 1px; padding-left: 8px; }
 .row:hover .actions { display: flex; }
-
-/* ------------------------------------------------------------- trees */
-.tree { list-style: none; margin: 0; padding: 0; }
-.tree .tree { padding-left: 13px; }
-.tree.ws { padding: 2px 0; }
-.tree-row.is-repo .fname { color: var(--id); font-weight: 500; }
-.tree-row.is-repo .gut { color: var(--id); }
-.tree-row .fname { color: var(--ash); }
-.tree-row.dir .fname { color: var(--bone); }
-.tree-row.ignored .fname { color: var(--dim); }
-.tree-row.active .fname { color: var(--bone); }
 
 /* --------------------------------------------------------- worktrees */
 .wt {
@@ -434,13 +449,114 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .tok-f { color: #9fd2e0; }
 .tok-t { color: #eccb8e; }
 
-/* ----------------------------------------------------------- scroll */
-::-webkit-scrollbar { width: 11px; height: 11px; }
-::-webkit-scrollbar-thumb { background: #423b30; border: 3px solid var(--ink); border-radius: 6px; }
-::-webkit-scrollbar-thumb:hover { background: #574e40; }
-::-webkit-scrollbar-track { background: transparent; }
-.sidebar::-webkit-scrollbar-thumb { border-color: var(--ink-1); }
-
-@media (prefers-reduced-motion: reduce) {
-  * { transition: none !important; }
+/* ------------------------------------------------------------- graph */
+/*
+ * Every repository at once, each one a column of its own history: newest at
+ * the top, lanes on the left, the message on the right. The columns are
+ * centred as a group, so two repos read as a pair rather than as a row that
+ * ran out of things to say.
+ */
+.graph {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--ink);
 }
+.graph[hidden] { display: none; }
+
+.graph-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  padding: 0 8px 0 14px;
+  flex: none;
+  background: var(--ink-1);
+  border-bottom: 1px solid var(--rule);
+  user-select: none;
+}
+.graph-head .meta { color: var(--dim); font-size: 11px; }
+.graph-head select { border: 1px solid var(--rule); background: var(--ink-1); }
+
+.graph-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-wrap: wrap; /* forty repos are a wall, not a row */
+  /* `safe` so a wide column never gets centred off the left edge, out of reach. */
+  justify-content: safe center;
+  align-content: flex-start;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px;
+}
+.graph-body > .blank { padding: 34px 16px; }
+
+.gcol {
+  --id: var(--ash);
+  flex: 1 1 460px;
+  min-width: 300px;
+  max-width: 720px;
+  background: var(--ink-1);
+  border: 1px solid var(--rule);
+  border-top: 2px solid var(--id);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.ghead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 10px;
+  background: color-mix(in srgb, var(--id) 14%, #221e18);
+  border-bottom: 1px solid color-mix(in srgb, var(--id) 22%, var(--rule));
+}
+.ghead .gdot { width: 6px; height: 6px; border-radius: 50%; background: var(--id); align-self: center; }
+.gname { color: var(--id); font-size: 13px; }
+.gbranch { color: var(--dim); font-size: 11px; }
+.gcount { color: var(--dim); font-size: 11px; }
+
+/* The lines are one SVG behind the rows; the rows just leave room for them. */
+/* A long history scrolls inside its own card, so one busy repo cannot push
+   every other one off the screen. */
+.gbody { position: relative; padding: 4px 0 6px; max-height: 62vh; overflow: auto; }
+.glines { position: absolute; top: 4px; left: 0; overflow: visible; }
+.glines path { fill: none; stroke-width: 2; stroke-linecap: round; }
+.glines circle { stroke: var(--ink-1); stroke-width: 1.5; }
+.glines circle.merge { stroke: var(--ink); }
+
+.grow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 22px;
+  padding-right: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.grow:hover { background: var(--ink-2); }
+.gsubject { color: var(--bone); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* The name and the age never give way; the subject is what gets clipped. */
+.gwho { flex: none; color: var(--dim); font-size: 11px; max-width: 16ch; overflow: hidden; text-overflow: ellipsis; }
+.gage { flex: none; color: var(--dim); font-size: 11px; min-width: 4ch; text-align: right; }
+
+.gref {
+  flex: none;
+  font-size: 10.5px;
+  padding: 0 5px;
+  border-radius: 8px;
+  color: var(--amber);
+  border: 1px solid color-mix(in srgb, var(--amber) 40%, transparent);
+}
+.gref.head { color: var(--sky); border-color: color-mix(in srgb, var(--sky) 45%, transparent); }
+
+/* The graph tab's sidebar: the same repos, as a table of contents. */
+.glist-row { --id: var(--ash); gap: 7px; cursor: pointer; }
+.glist-row .gdot-cell { color: var(--id); }
+.glist-row .count { color: var(--dim); font-size: 11px; padding-right: 8px; }
+
+
+[hidden] { display: none !important; }

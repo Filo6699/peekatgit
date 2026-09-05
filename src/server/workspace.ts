@@ -4,9 +4,9 @@
 import { readdir } from 'node:fs/promises'
 import { existsSync, statSync, type Dirent } from 'node:fs'
 import path from 'node:path'
-import type { RepoSummary, TreeEntry, Workspace, Worktree } from '../shared/types.ts'
+import type { RepoSummary, Workspace, Worktree } from '../shared/types.ts'
 import { allPrefs, forgetRepo, updatePrefs } from './config.ts'
-import { head, ignoredNames, status, toplevel, worktrees as listWorktrees } from './git.ts'
+import { headAndStatus, toplevel, worktreeCount, worktrees as listWorktrees } from './git.ts'
 
 export type RepoRecord = {
   id: string
@@ -35,8 +35,9 @@ export function requireRepo(id: string | null): string {
 
 export async function init(target: string): Promise<void> {
   root = path.resolve(target)
-  const asRepo = await toplevel(root)
-  rootIsRepo = asRepo === root
+  // A `.git` directory settles it without asking git; only the ambiguous cases
+  // (a worktree file, a subdirectory of some checkout) are worth a process.
+  rootIsRepo = safeIsDir(path.join(root, '.git')) || (await toplevel(root)) === root
   await scan()
   if (!registry.size) throw new Error(`no git repositories in ${root} (looked here and one level down)`)
 }
@@ -54,12 +55,21 @@ export async function scan(): Promise<void> {
     entries = []
   }
 
+  // A `.git` directory means the candidate is the top level, full stop. Only a
+  // `.git` file — a worktree or a submodule — needs git to say where it points,
+  // and those few run together rather than one launch after another. Asking git
+  // once per subdirectory was most of what a workspace cost to open.
+  const ambiguous: string[] = []
   for (const entry of entries) {
     const isDir = entry.isDirectory() || (entry.isSymbolicLink() && safeIsDir(path.join(root, entry.name)))
     if (!isDir || entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue
     const candidate = path.join(root, entry.name)
-    if (!existsSync(path.join(candidate, '.git'))) continue
-    const top = await toplevel(candidate)
+    const dotGit = path.join(candidate, '.git')
+    if (safeIsDir(dotGit)) found.set(candidate, record(candidate))
+    else if (existsSync(dotGit)) ambiguous.push(candidate)
+  }
+
+  for (const top of await Promise.all(ambiguous.map(toplevel))) {
     if (top) found.set(top, record(top))
   }
 
@@ -145,12 +155,12 @@ async function factsFor(id: string): Promise<RepoFacts> {
   const cached = facts.get(id)
   if (cached) return cached
   try {
-    const [info, report, trees] = await Promise.all([head(id), status(id), listWorktrees(id)])
+    const [{ head: info, report }, trees] = await Promise.all([headAndStatus(id), worktreeCount(id)])
     const fresh: RepoFacts = {
       ...info,
       staged: report.staged.length,
       changes: report.changes.length,
-      worktrees: trees.length,
+      worktrees: trees,
     }
     facts.set(id, fresh)
     return fresh
@@ -202,46 +212,6 @@ export async function describe(): Promise<Workspace> {
 
   repos.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
   return { root, name: path.basename(root), rootIsRepo, repos }
-}
-
-// ------------------------------------------------------- the project tree
-// The Files tab browses the workspace itself, not one repository at a time:
-// the directories between repos are part of the project too.
-
-export async function listWorkspaceDir(relative: string): Promise<TreeEntry[]> {
-  const abs = path.resolve(root, relative)
-  if (abs !== root && !abs.startsWith(root + path.sep)) throw new Error('path escapes workspace')
-
-  const entries = (await readdir(abs, { withFileTypes: true })).filter(entry => entry.name !== '.git')
-  const owner = ownerOf(abs)
-  const ignored = owner
-    ? await ignoredNames(owner.repo, owner.relative, entries.map(entry => entry.name))
-    : new Set<string>()
-
-  return entries
-    .map(entry => ({
-      name: entry.name,
-      path: relative ? path.posix.join(relative, entry.name) : entry.name,
-      dir: entry.isDirectory(),
-      ignored: ignored.has(entry.name),
-      repo: registry.has(path.join(abs, entry.name)),
-    }))
-    .sort((a, b) => (a.dir === b.dir ? a.name.localeCompare(b.name) : a.dir ? -1 : 1))
-}
-
-/** The repository a path sits in, if any — the deepest one wins for nested worktrees. */
-export function ownerOf(absPath: string): { repo: string; relative: string } | null {
-  let best: string | null = null
-  for (const id of registry.keys()) {
-    if ((absPath === id || absPath.startsWith(id + path.sep)) && (!best || id.length > best.length)) best = id
-  }
-  return best ? { repo: best, relative: path.relative(best, absPath) } : null
-}
-
-export function workspaceFile(relative: string): { base: string; owner: ReturnType<typeof ownerOf> } {
-  const abs = path.resolve(root, relative)
-  if (abs !== root && !abs.startsWith(root + path.sep)) throw new Error('path escapes workspace')
-  return { base: root, owner: ownerOf(abs) }
 }
 
 export async function worktreesOf(id: string): Promise<Worktree[]> {

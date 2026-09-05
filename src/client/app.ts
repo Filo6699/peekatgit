@@ -1,8 +1,11 @@
 import type { ChangeEvent } from '../shared/types.ts'
 import { api } from './api.ts'
 import { byId } from './dom.ts'
-import { refreshTrees, renderSidebar } from './sidebar.ts'
+import { initGraph, openGraph, refreshGraph } from './graph.ts'
+import { showPane } from './panes.ts'
+import { renderSidebar } from './sidebar.ts'
 import { docRepo, hooks, state, visibleRepos } from './state.ts'
+import { mark } from './trace.ts'
 import { openDoc, refreshDoc } from './viewer.ts'
 
 const ui = {
@@ -18,6 +21,7 @@ const ui = {
  * document need re-reading too.
  */
 async function refresh(touched?: string[]): Promise<void> {
+  const done = mark('refresh')
   state.workspace = await api.workspace()
   document.title = `${state.workspace.name} — PeekAtGit`
   ui.workspaceName.textContent = state.workspace.name
@@ -35,13 +39,16 @@ async function refresh(touched?: string[]): Promise<void> {
   renderSidebar()
 
   const changed = touched ?? state.workspace.repos.map(repo => repo.id)
-  await refreshTrees(changed)
+  await refreshGraph(changed) // a no-op unless the graph is the tab that is up
   const owner = docRepo(state.doc)
   if (state.doc && (!owner || changed.includes(owner))) await refreshDoc()
+  done(changed.join(' '))
 }
 
 hooks.refresh = refresh
+hooks.paint = renderSidebar
 hooks.open = async doc => {
+  showPane('viewer')
   await openDoc(doc)
   renderSidebar() // repaint the active-row highlight
 }
@@ -94,4 +101,7 @@ function subscribe(): void {
 }
 
 await refresh()
+initGraph()
+// The remembered tab may be the one that owns the right-hand pane.
+if (state.tab === 'graph') openGraph()
 subscribe()

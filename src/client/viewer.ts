@@ -4,17 +4,28 @@ import { api } from './api.ts'
 import { countChanges, parseDiff, type DiffRow } from './diff.ts'
 import { actionButton, byId, el } from './dom.ts'
 import { escapeHtml, highlight, languageOf } from './highlight.ts'
-import { formatSize, hooks, repoColor, state, type Doc } from './state.ts'
+import { hooks, repoColor, state, type Doc } from './state.ts'
+import { mark } from './trace.ts'
 
 const headEl = byId('viewerHead')
 const bodyEl = byId('viewerBody')
 
 const repoName = (id: string): string => state.workspace.repos.find(repo => repo.id === id)?.name ?? id
 
+/** The repo the server was last asked to watch closely. */
+let focused = ''
+
 export async function openDoc(doc: Doc): Promise<void> {
+  const done = mark(`open ${doc.kind}`)
   state.doc = doc
-  if (doc.kind !== 'wsfile') void api.focus(doc.repo) // ask the server to watch this repo closely
-  await render(doc)
+  // Ask the server to watch this repo closely — but only when the answer would
+  // change. Reading ten files in one repo is one request, not ten.
+  if (doc.repo !== focused) {
+    focused = doc.repo
+    void api.focus(doc.repo)
+  }
+  await renderDiff(doc)
+  done(doc.path)
 }
 
 /** Re-renders whatever is open, keeping the scroll position. */
@@ -22,7 +33,7 @@ export async function refreshDoc(): Promise<void> {
   if (!state.doc) return
   const scroll = bodyEl.scrollTop
   try {
-    await render(state.doc)
+    await renderDiff(state.doc)
     bodyEl.scrollTop = scroll
   } catch {
     // The open file was deleted or renamed underneath us.
@@ -30,12 +41,6 @@ export async function refreshDoc(): Promise<void> {
     bodyEl.innerHTML = '<div class="blank"><p>This file no longer exists.</p></div>'
     state.doc = null
   }
-}
-
-function render(doc: Doc): Promise<void> {
-  if (doc.kind === 'diff') return renderDiff(doc)
-  if (doc.kind === 'file') return renderFile(doc)
-  return renderWorkspaceFile(doc)
 }
 
 /** The file's identity, read as one path: the repo owns the colour, the name the weight. */
@@ -55,48 +60,10 @@ function setHead(repo: string | null, filePath: string, meta: HTMLElement, actio
 
 const metaText = (text: string): HTMLElement => el('span', 'meta', text)
 
-function renderSource(payload: { size: number; content?: string; binary?: boolean; tooBig?: boolean }, filePath: string): void {
-  if (payload.binary || payload.tooBig) {
-    const what = payload.binary ? 'Binary file' : 'File too large to display'
-    bodyEl.innerHTML = `<div class="blank"><p>${what} — ${formatSize(payload.size)}</p></div>`
-    return
-  }
-  const content = payload.content ?? ''
-  const numbers = content.split('\n').map((_, index) => index + 1).join('\n')
-  bodyEl.innerHTML =
-    `<div class="code"><pre class="ln">${numbers}</pre>` +
-    `<pre class="src">${highlight(content, languageOf(filePath))}</pre></div>`
-}
-
-async function renderFile(doc: Extract<Doc, { kind: 'file' }>): Promise<void> {
-  const payload = await api.file(doc.repo, doc.path)
-  setHead(doc.repo, doc.path, metaText(formatSize(payload.size)), [
-    actionButton('diff', 'Show working-tree diff for this file', () =>
-      hooks.open({ kind: 'diff', repo: doc.repo, path: doc.path, staged: false, untracked: false })
-    ),
-  ])
-  renderSource(payload, doc.path)
-}
-
-/** A file from the project tree. It may or may not belong to a repository. */
-async function renderWorkspaceFile(doc: Extract<Doc, { kind: 'wsfile' }>): Promise<void> {
-  const payload = await api.wsFile(doc.path)
-  const actions: HTMLElement[] = []
-  if (payload.repo && payload.repoPath) {
-    const repo = payload.repo
-    const inRepo = payload.repoPath
-    actions.push(
-      actionButton('diff', 'Show working-tree diff for this file', () =>
-        hooks.open({ kind: 'diff', repo, path: inRepo, staged: false, untracked: false })
-      )
-    )
-  }
-  setHead(payload.repo ?? null, payload.repoPath ?? doc.path, metaText(formatSize(payload.size)), actions)
-  renderSource(payload, doc.path)
-}
-
 async function renderDiff(doc: Extract<Doc, { kind: 'diff' }>): Promise<void> {
+  const fetched = mark('  fetch diff')
   const raw = await api.diff(doc.repo, doc.path, doc.staged, doc.untracked)
+  fetched(`${raw.length} bytes`)
   const rows = parseDiff(raw)
   const { added, removed } = countChanges(rows)
 
@@ -110,9 +77,6 @@ async function renderDiff(doc: Extract<Doc, { kind: 'diff' }>): Promise<void> {
       await (doc.staged ? api.unstage(doc.repo, [doc.path]) : api.stage(doc.repo, [doc.path]))
       await hooks.refresh([doc.repo])
     }),
-    actionButton('whole file', 'Open the whole file', () =>
-      hooks.open({ kind: 'file', repo: doc.repo, path: doc.path })
-    ),
   ])
 
   if (!rows.length) {
@@ -121,7 +85,9 @@ async function renderDiff(doc: Extract<Doc, { kind: 'diff' }>): Promise<void> {
   }
 
   const language = languageOf(doc.path)
+  const drawn = mark('  draw diff')
   bodyEl.innerHTML = `<div class="diff">${rows.map(row => diffRowHtml(row, language)).join('')}</div>`
+  drawn(`${rows.length} rows`)
 }
 
 function diffRowHtml(row: DiffRow, language: ReturnType<typeof languageOf>): string {

@@ -1,16 +1,15 @@
 import type { StatusReport, Workspace, Worktree } from '../shared/types.ts'
 
-/** What the single viewer pane is currently showing. */
-export type Doc =
-  | { kind: 'diff'; repo: string; path: string; staged: boolean; untracked: boolean }
-  | { kind: 'file'; repo: string; path: string }
-  /** A file picked from the project tree — its path is workspace-relative. */
-  | { kind: 'wsfile'; path: string }
-
-export const docRepo = (doc: Doc | null): string | null => (doc && doc.kind !== 'wsfile' ? doc.repo : null)
+/** A selected change, in the index or working tree. */
+export type Doc = { kind: 'diff'; repo: string; path: string; staged: boolean; untracked: boolean; from?: string | null }
+export const docRepo = (doc: Doc | null): string | null => doc?.repo ?? null
+export type Tab = 'changes' | 'graph'
+const TAB_KEY = 'peekatgit.tab'
+const savedTab = localStorage.getItem(TAB_KEY)
 
 export const state = {
-  tab: 'changes' as 'changes' | 'files',
+  /** Which sidebar tab is up — remembered, like the sidebar width and the dock. */
+  tab: (savedTab === 'graph' ? savedTab : 'changes') as Tab,
   workspace: { root: '', name: '', rootIsRepo: false, repos: [] } as Workspace,
   statuses: {} as Record<string, StatusReport>,
   worktrees: {} as Record<string, Worktree[]>,
@@ -19,21 +18,27 @@ export const state = {
   showHidden: false,
   /** Repos whose change lists are folded away. */
   collapsed: new Set<string>(),
+  /** Repos with a sync in flight; their button is spoken for until it lands. */
+  syncing: new Set<string>(),
   /** Repos whose worktree list is unfolded. */
   worktreesOpen: new Set<string>(),
-  /** Expanded directories in the project tree, workspace-relative. */
-  wsExpanded: new Set<string>(),
+}
+
+export function setTab(tab: Tab): void {
+  state.tab = tab
+  localStorage.setItem(TAB_KEY, tab)
 }
 
 /** Wired up by app.ts; lets sidebar and viewer call each other without a cycle. */
 export const hooks = {
   refresh: async (_repos?: string[]): Promise<void> => {},
   open: async (_doc: Doc): Promise<void> => {},
+  /** Repaint the sidebar — for when something else learned what it shows. */
+  paint: (): void => {},
 }
 
 export const docKey = (doc: Doc | null): string => {
   if (!doc) return ''
-  if (doc.kind === 'wsfile') return `ws file:${doc.path}`
   return `${doc.repo} ${doc.kind}:${doc.kind === 'diff' && doc.staged ? 's' : 'w'}:${doc.path}`
 }
 

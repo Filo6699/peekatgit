@@ -2,13 +2,15 @@
 //
 // Two rules keep it readable at this density:
 //   1. a clean repo is a single line — no body, no placeholder text;
-//   2. files that share a directory are gathered under one dim heading
-//      instead of repeating the same path fifteen times.
+//   2. staged and unstaged files are two banded groups, each in its own
+//      colour, so which side of the index you are looking at is never a guess.
 
-import type { ChangeEntry, RepoSummary, StatusCode, TreeEntry } from '../shared/types.ts'
+import type { ChangeEntry, RepoSummary, StatusCode } from '../shared/types.ts'
 import { api } from './api.ts'
 import { actionButton, byId, el } from './dom.ts'
-import { docKey, hooks, repoColor, state, type Doc } from './state.ts'
+import { graphCount, openGraph, scrollToRepo } from './graph.ts'
+import { showPane } from './panes.ts'
+import { docKey, hooks, repoColor, setTab, state, visibleRepos, type Doc } from './state.ts'
 
 const host = byId('sidebar')
 const tabsHost = byId('tabs')
@@ -30,7 +32,7 @@ const MARK: Record<StatusCode, [mark: string, tone: string, label: string]> = {
 
 export function renderSidebar(): void {
   renderTabs()
-  if (state.tab === 'files') return host.replaceChildren(projectTree())
+  if (state.tab === 'graph') return host.replaceChildren(graphList())
 
   const repos = state.workspace.repos.filter(repo => state.showHidden || !repo.hidden)
   const busy = repos.filter(repo => repo.staged || repo.changes || state.errors[repo.id] || repo.error)
@@ -44,21 +46,44 @@ export function renderSidebar(): void {
 
 function renderTabs(): void {
   const total = state.workspace.repos.reduce((sum, repo) => sum + repo.staged + repo.changes, 0)
-  const tabs: Array<[key: 'changes' | 'files', label: string, badge: string]> = [
+  const tabs: Array<[key: typeof state.tab, label: string, badge: string]> = [
     ['changes', 'Changes', total ? String(total) : ''],
-    ['files', 'Files', ''],
+    ['graph', 'History', ''],
   ]
   tabsHost.replaceChildren(
     ...tabs.map(([key, label, badge]) => {
       const button = el('button', `tab${state.tab === key ? ' on' : ''}`, label)
       if (badge) button.append(el('span', 'tab-n', badge))
       button.addEventListener('click', () => {
-        state.tab = key
+        setTab(key)
+        // The graph lives in the right-hand pane, so picking it is also a
+        // decision about what that pane shows; the other tabs hand it back.
+        if (key === 'graph') openGraph()
+        else showPane('viewer')
         renderSidebar()
       })
       return button
     })
   )
+}
+
+/** The graph tab's sidebar: one line per drawn repository, and a way to it. */
+function graphList(): HTMLElement {
+  const list = el('div', 'glist')
+  const repos = visibleRepos().filter(repo => !repo.hidden)
+  if (!repos.length) return el('div', 'empty', 'No repositories here.')
+
+  for (const repo of repos) {
+    const row = el('div', 'row glist-row')
+    row.style.setProperty('--id', repoColor(repo.id))
+    row.title = repo.id
+    row.append(el('span', 'gut gdot-cell', '●'), el('span', 'repo-name', repo.name))
+    if (repo.branch) row.append(el('span', 'repo-branch', repo.branch))
+    row.append(el('span', 'spacer'), el('span', 'count', String(graphCount(repo.id))))
+    row.addEventListener('click', () => scrollToRepo(repo.id))
+    list.append(row)
+  }
+  return list
 }
 
 /** Repos with nothing going on are parked together at the bottom, one line each. */
@@ -98,11 +123,9 @@ function repoSection(repo: RepoSummary): HTMLElement {
   if (showsWorktrees) body.append(worktreeList(repo))
   if (staged.length) {
     body.append(commitBox(repo))
-    body.append(section_('Staged', staged.length, 'Unstage all', () => bulk(repo, false)), fileList(repo, staged, true))
+    body.append(stageGroup(repo, staged, true))
   }
-  if (changed.length) {
-    body.append(section_('Changed', changed.length, 'Stage all', () => bulk(repo, true)), fileList(repo, changed, false))
-  }
+  if (changed.length) body.append(stageGroup(repo, changed, false))
   return section
 }
 
@@ -115,8 +138,7 @@ function repoRow(repo: RepoSummary): HTMLElement {
   if (repo.isWorktree) row.append(el('span', 'repo-flag', 'worktree'))
   if (repo.branch) row.append(el('span', 'repo-branch', repo.branch))
 
-  const sync = `${repo.behind ? `↓${repo.behind}` : ''}${repo.ahead ? `↑${repo.ahead}` : ''}`
-  if (sync) row.append(el('span', 'repo-sync', sync))
+  if (repo.tracking) row.append(syncButton(repo))
 
   if (repo.worktrees > 1) {
     const chip = el('button', 'repo-wt', `⑂${repo.worktrees}`)
@@ -163,11 +185,63 @@ function repoRow(repo: RepoSummary): HTMLElement {
   return row
 }
 
-function section_(title: string, count: number, bulkLabel: string, onBulk: () => void): HTMLElement {
+/**
+ * The ahead/behind chip is the button: it already says what is out of step, so
+ * pressing it is the obvious way to fix that. With nothing to move it stays out
+ * of the way until the row is hovered — a fetch is still worth having then,
+ * since ahead/behind only knows what the last fetch brought in.
+ */
+function syncButton(repo: RepoSummary): HTMLButtonElement {
+  const busy = state.syncing.has(repo.id)
+  const arrows = `${repo.behind ? `↓${repo.behind}` : ''}${repo.ahead ? `↑${repo.ahead}` : ''}`
+
+  const button = el('button', 'repo-sync', busy ? '⟳' : arrows || 'sync')
+  if (!arrows) button.classList.add('idle')
+  if (busy) button.classList.add('busy')
+  button.disabled = busy
+  button.title = busy
+    ? 'Syncing…'
+    : `Sync with ${repo.tracking}${repo.behind ? ` — pull ${repo.behind}` : ''}${repo.ahead ? ` — push ${repo.ahead}` : ''}`
+  button.addEventListener('click', event => {
+    event.stopPropagation()
+    void syncRepo(repo.id)
+  })
+  return button
+}
+
+async function syncRepo(repoId: string): Promise<void> {
+  if (state.syncing.has(repoId)) return
+  state.syncing.add(repoId)
+  delete state.errors[repoId]
+  renderSidebar()
+  try {
+    const result = await api.sync(repoId)
+    if (!result.ok) state.errors[repoId] = result.error
+  } catch (error) {
+    state.errors[repoId] = String((error as Error).message ?? error)
+  } finally {
+    state.syncing.delete(repoId)
+  }
+  await hooks.refresh([repoId])
+}
+
+/**
+ * One side of the index: a banded heading in the group's own colour, then the
+ * files. The band is what you land on when scanning, so it carries the colour,
+ * the name, the count and the bulk action.
+ */
+function stageGroup(repo: RepoSummary, entries: ChangeEntry[], staged: boolean): HTMLElement {
+  const group = el('div', `group ${staged ? 'grp-staged' : 'grp-changed'}`)
   const head = el('div', 'sect')
-  head.append(el('span', 'label', title), el('span', 'count', String(count)))
-  head.append(actionButton(bulkLabel.toLowerCase(), bulkLabel, onBulk))
-  return head
+  head.append(el('span', 'sect-dot'), el('span', 'label sect-title', staged ? 'Staged' : 'Changed'))
+  head.append(el('span', 'count', String(entries.length)))
+  head.append(
+    actionButton(staged ? 'unstage all' : 'stage all', staged ? 'Unstage all' : 'Stage all', () =>
+      bulk(repo, !staged)
+    )
+  )
+  group.append(head, fileList(repo, entries, staged))
+  return group
 }
 
 const dirOf = (filePath: string): string => {
@@ -175,31 +249,12 @@ const dirOf = (filePath: string): string => {
   return cut === -1 ? '' : filePath.slice(0, cut)
 }
 
-/**
- * Directories that hold two or more changed files get a heading and the files
- * below it lose their path. A lone file keeps its directory inline — a heading
- * for one row would cost two lines to say what one can.
- */
+/** Every row is a whole file: its name, then its directory, on one line. */
 function fileList(repo: RepoSummary, entries: ChangeEntry[], staged: boolean): HTMLElement {
   const list = el('ul', 'files')
-  const perDir = new Map<string, number>()
-  for (const entry of entries) perDir.set(dirOf(entry.path), (perDir.get(dirOf(entry.path)) ?? 0) + 1)
-
-  let lastHeading: string | null = null
   for (const entry of entries) {
     const dir = dirOf(entry.path)
-    const name = dir ? entry.path.slice(dir.length + 1) : entry.path
-    const grouped = dir !== '' && (perDir.get(dir) ?? 0) > 1
-
-    if (grouped && dir !== lastHeading) {
-      lastHeading = dir
-      const heading = el('li', 'dirhead')
-      heading.append(el('span', '', `${dir}/`))
-      heading.title = dir
-      list.append(heading)
-    }
-    if (!grouped) lastHeading = null
-    list.append(fileRow(repo, entry, name, staged, grouped ? '' : dir))
+    list.append(fileRow(repo, entry, dir ? entry.path.slice(dir.length + 1) : entry.path, staged, dir))
   }
   return list
 }
@@ -339,67 +394,3 @@ function worktreeList(repo: RepoSummary): HTMLElement {
   return list
 }
 
-// ------------------------------------------------------------------ files
-// The Files tab is one tree over the whole project — the directories between
-// repositories belong to it too, so browsing is not scoped to a checkout.
-
-let projectTreeEl: HTMLUListElement | null = null
-
-function projectTree(): HTMLElement {
-  if (!projectTreeEl) {
-    projectTreeEl = el('ul', 'tree ws')
-    void fillTree(projectTreeEl, '')
-  }
-  return projectTreeEl
-}
-
-async function fillTree(node: HTMLElement, dir: string): Promise<void> {
-  const entries = await api.wsTree(dir)
-  node.replaceChildren(...entries.map(treeNode))
-}
-
-/** Re-reads the project tree when it is the visible tab. */
-export async function refreshTrees(_repoIds: string[]): Promise<void> {
-  if (state.tab === 'files' && projectTreeEl) await fillTree(projectTreeEl, '')
-}
-
-function treeNode(entry: TreeEntry): HTMLLIElement {
-  const node = el('li')
-  const row = el('div', 'row tree-row')
-  row.dataset.path = entry.path
-  if (entry.ignored) row.classList.add('ignored')
-  if (entry.dir) row.classList.add('dir')
-
-  if (entry.repo) {
-    // A repository in the tree carries the same colour as its block in Changes.
-    row.classList.add('is-repo')
-    row.style.setProperty('--id', repoColor(`${state.workspace.root}/${entry.path}`))
-  }
-  row.append(el('span', 'gut', entry.dir ? '▸' : ''), el('span', 'fname', entry.name))
-  node.append(row)
-
-  if (!entry.dir) {
-    const doc: Doc = { kind: 'wsfile', path: entry.path }
-    row.classList.toggle('active', docKey(doc) === docKey(state.doc))
-    row.addEventListener('click', () => void hooks.open(doc))
-    return node
-  }
-
-  const children = el('ul', 'tree')
-  children.hidden = true
-  node.append(children)
-
-  const toggle = async () => {
-    const opening = children.hidden
-    children.hidden = !opening
-    row.querySelector('.gut')!.textContent = opening ? '▾' : '▸'
-    if (opening) {
-      state.wsExpanded.add(entry.path)
-      if (!children.childElementCount) await fillTree(children, entry.path)
-    } else state.wsExpanded.delete(entry.path)
-  }
-
-  row.addEventListener('click', () => void toggle())
-  if (state.wsExpanded.has(entry.path)) void toggle()
-  return node
-}

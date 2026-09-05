@@ -6,15 +6,14 @@ import path from 'node:path'
 import { after, describe, test } from 'node:test'
 import {
   diff,
-  fileContent,
   hasHead,
-  head,
-  ignoredNames,
-  listDir,
+  headAndStatus,
+  parseBranchHeader,
   parseStatus,
   resolveSafe,
   status,
   toplevel,
+  worktreeCount,
   worktrees,
 } from '../src/server/git.ts'
 import { cleanup, commitAll, git, makeRepo, tempDir, write } from './helpers.ts'
@@ -59,6 +58,48 @@ describe('parseStatus', () => {
   })
 })
 
+describe('parseBranchHeader', () => {
+  test('branch, upstream and the counts beside it', () => {
+    assert.deepEqual(parseBranchHeader('## main...origin/main [ahead 1, behind 2]'), {
+      branch: 'main',
+      tracking: 'origin/main',
+      ahead: 1,
+      behind: 2,
+    })
+    assert.deepEqual(parseBranchHeader('## main...origin/main [ahead 3]'), {
+      branch: 'main',
+      tracking: 'origin/main',
+      ahead: 3,
+      behind: 0,
+    })
+  })
+
+  test('no upstream, a gone one, and a detached head', () => {
+    assert.deepEqual(parseBranchHeader('## main'), { branch: 'main', tracking: '', ahead: 0, behind: 0 })
+    assert.deepEqual(parseBranchHeader('## work...origin/work [gone]'), {
+      branch: 'work',
+      tracking: 'origin/work',
+      ahead: 0,
+      behind: 0,
+    })
+    assert.deepEqual(parseBranchHeader('## HEAD (no branch)'), {
+      branch: 'HEAD',
+      tracking: '',
+      ahead: 0,
+      behind: 0,
+    })
+  })
+
+  test('an empty repository still names its branch', () => {
+    assert.deepEqual(parseBranchHeader('## No commits yet on main'), {
+      branch: 'main',
+      tracking: '',
+      ahead: 0,
+      behind: 0,
+    })
+  })
+})
+
 describe('resolveSafe', () => {
   test('keeps repo-relative paths', () => {
     assert.equal(resolveSafe('/repo', 'src/a.ts'), path.join('/repo', 'src/a.ts'))
@@ -86,8 +127,9 @@ describe('against a real repository', () => {
     await commitAll(repo, 'first')
 
     assert.equal(await hasHead(repo), true)
-    assert.equal((await head(repo)).branch, 'main')
-    assert.equal((await head(repo)).tracking, '', 'no upstream configured')
+    const summary = await headAndStatus(repo)
+    assert.equal(summary.head.branch, 'main')
+    assert.equal(summary.head.tracking, '', 'no upstream configured')
     assert.equal(await toplevel(repo), repo)
 
     await write(repo, 'README.md', '# alpha\nmore\n')
@@ -115,57 +157,5 @@ describe('against a real repository', () => {
     await assert.rejects(() => diff(repo, '../outside.txt', false, false), /escapes repository/)
   })
 
-  test('listDir sorts directories first and marks ignored entries', async () => {
-    const repo = await makeRepo(path.join(await tempDir(), 'alpha'))
-    await write(repo, '.gitignore', 'ignored.txt\n')
-    await write(repo, 'visible.txt', 'x\n')
-    await write(repo, 'ignored.txt', 'x\n')
-    await write(repo, 'src/deep.ts', 'x\n')
-    await commitAll(repo, 'first')
 
-    const entries = await listDir(repo, '')
-    assert.deepEqual(entries.map(e => e.name), ['src', '.gitignore', 'ignored.txt', 'visible.txt'])
-    assert.equal(entries.find(e => e.name === 'src')?.dir, true)
-    assert.equal(entries.find(e => e.name === 'ignored.txt')?.ignored, true)
-    assert.equal(entries.find(e => e.name === 'visible.txt')?.ignored, false)
-    assert.equal(entries.some(e => e.name === '.git'), false, '.git is never listed')
-
-    const nested = await listDir(repo, 'src')
-    assert.deepEqual(nested.map(e => e.path), ['src/deep.ts'])
-  })
-
-  test('ignoredNames answers for a whole directory at once', async () => {
-    const repo = await makeRepo(path.join(await tempDir(), 'alpha'))
-    await write(repo, '.gitignore', '*.log\n')
-    await commitAll(repo, 'first')
-
-    const ignored = await ignoredNames(repo, '', ['app.log', 'app.ts'])
-    assert.deepEqual([...ignored], ['app.log'])
-    assert.equal((await ignoredNames(repo, '', [])).size, 0)
-  })
-
-  test('fileContent flags binary and oversized files instead of shipping them', async () => {
-    const repo = await makeRepo(path.join(await tempDir(), 'alpha'))
-    await write(repo, 'text.txt', 'plain\n')
-    await write(repo, 'blob.bin', 'head\0tail')
-
-    assert.equal((await fileContent(repo, 'text.txt')).content, 'plain\n')
-    assert.equal((await fileContent(repo, 'blob.bin')).binary, true)
-    await assert.rejects(() => fileContent(repo, '../escape.txt'), /escapes repository/)
-  })
-
-  test('worktrees lists the checkout it was asked about as current', async () => {
-    const root = await tempDir()
-    const repo = await makeRepo(path.join(root, 'alpha'))
-    await write(repo, 'a.txt', 'one\n')
-    await commitAll(repo, 'first')
-    await git(repo, 'worktree', 'add', '-q', '-b', 'feature', path.join(root, 'alpha-feature'))
-
-    const trees = await worktrees(repo)
-    assert.equal(trees.length, 2)
-    const current = trees.find(tree => tree.current)
-    assert.equal(current?.path, repo)
-    assert.equal(current?.branch, 'main')
-    assert.equal(trees.find(tree => !tree.current)?.branch, 'feature')
-  })
 })

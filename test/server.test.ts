@@ -6,6 +6,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { after, before, describe, test } from 'node:test'
+import type { ChangeEvent } from '../src/shared/types.ts'
 import { cleanup, commitAll, git, makeRepo, tempDir, write } from './helpers.ts'
 
 const ENTRY = fileURLToPath(new URL('../src/server.ts', import.meta.url))
@@ -16,6 +17,10 @@ let origin = ''
 let workspace = ''
 let alpha = ''
 let beta = ''
+/** A clone with a real (file://-less, plain path) remote, for the sync route. */
+let gamma = ''
+let remote = ''
+let peer = ''
 
 /** Boots the CLI exactly as a user would, on a port the OS picks for us. */
 function start(root: string, env: NodeJS.ProcessEnv): Promise<{ child: ChildProcess; origin: string }> {
@@ -74,6 +79,23 @@ before(async () => {
   await write(beta, 'README.md', '# beta\n')
   await commitAll(beta, 'first')
 
+  // A bare remote and a second checkout of it, both outside the workspace so
+  // the scan never sees them; `gamma` inside it is the one the sidebar drives.
+  const away = await tempDir()
+  remote = path.join(away, 'remote.git')
+  await git(away, 'init', '--bare', '-q', '-b', 'main', 'remote.git')
+  peer = await makeRepo(path.join(away, 'peer'))
+  await write(peer, 'README.md', '# gamma\n')
+  await commitAll(peer, 'first')
+  await git(peer, 'remote', 'add', 'origin', remote)
+  await git(peer, 'push', '-q', '-u', 'origin', 'main')
+
+  await git(workspace, 'clone', '-q', remote, 'gamma')
+  gamma = path.join(workspace, 'gamma')
+  await git(gamma, 'config', 'user.name', 'PeekAtGit Test')
+  await git(gamma, 'config', 'user.email', 'test@example.invalid')
+  await git(gamma, 'config', 'commit.gpgsign', 'false')
+
   // Config and logs go into the throwaway workspace, never the real home dir.
   const started = await start(workspace, {
     ...process.env,
@@ -90,14 +112,13 @@ after(async () => {
 })
 
 type Workspace = { root: string; name: string; rootIsRepo: boolean; repos: { id: string; name: string; branch: string; staged: number; changes: number }[] }
-type Entry = { name: string; path: string; dir: boolean }
 
 describe('http api', () => {
   test('the workspace lists every repository one level down', async () => {
     const summary = await json<Workspace>('/api/workspace')
     assert.equal(summary.root, workspace)
     assert.equal(summary.rootIsRepo, false)
-    assert.deepEqual(summary.repos.map(repo => repo.name), ['alpha', 'beta'])
+    assert.deepEqual(summary.repos.map(repo => repo.name), ['alpha', 'beta', 'gamma'])
     assert.equal(summary.repos[0]?.branch, 'main')
   })
 
@@ -112,41 +133,24 @@ describe('http api', () => {
   })
 
   test('rejects requests for repositories it does not track', async () => {
-    const response = await get(`/api/tree?repo=${encodeURIComponent('/etc')}`)
+    const response = await get(`/api/diff?repo=${encodeURIComponent('/etc')}`)
     assert.equal(response.status, 400)
     assert.match(((await response.json()) as { error: string }).error, /unknown repository/)
 
-    assert.equal((await get('/api/tree')).status, 400)
+    assert.equal((await get('/api/diff')).status, 400)
   })
 
   test('refuses paths that leave the repository', async () => {
-    const response = await get(`/api/file?repo=${encodeURIComponent(alpha)}&path=../beta/README.md`)
+    const response = await get(`/api/diff?repo=${encodeURIComponent(alpha)}&path=../beta/README.md`)
     assert.equal(response.status, 400)
     assert.match(((await response.json()) as { error: string }).error, /escapes repository/)
   })
 
-  test('browses trees and reads files', async () => {
-    const top = await json<Entry[]>(`/api/tree?repo=${encodeURIComponent(alpha)}`)
-    assert.deepEqual(top.map(entry => entry.name), ['src', 'README.md'])
-
-    const file = await json<{ content: string }>(
-      `/api/file?repo=${encodeURIComponent(alpha)}&path=src/main.ts`
-    )
-    assert.equal(file.content, 'export const answer = 42\n')
-  })
-
-  test('the workspace tree spans the repos and names the owner of a file', async () => {
-    const top = await json<Entry[]>('/api/ws/tree?path=')
-    assert.deepEqual(top.map(entry => entry.name).sort(), ['alpha', 'beta'])
-
-    const owned = await json<{ repo: string; repoPath: string; content: string }>(
-      '/api/ws/file?path=alpha/README.md'
-    )
-    assert.equal(owned.repo, alpha)
-    assert.equal(owned.repoPath, 'README.md')
-    assert.equal(owned.content, '# alpha\n')
-
-    assert.equal((await get('/api/ws/tree?path=../..')).status, 400)
+  test('removed file browser and terminal routes return 404', async () => {
+    for (const route of ['/api/tree', '/api/file', '/api/ws/tree', '/api/ws/file', '/api/term/stream']) {
+      assert.equal((await get(route)).status, 404)
+    }
+    assert.equal((await post('/api/term/run', { command: 'echo removed' })).status, 404)
   })
 
   test('stage, diff, commit and unstage move the same file through the api', async () => {
@@ -227,6 +231,33 @@ describe('http api', () => {
     assert.equal((await json<Workspace>('/api/workspace')).repos.some(repo => repo.id === extra), false)
   })
 
+  test('sync pulls what the remote has and pushes what we have', async () => {
+    // Both sides move: the remote gains a commit, we gain another. One press
+    // has to fetch, rebase ours on top, and then hand ours over.
+    await write(peer, 'THEIRS.md', 'from the remote\n')
+    await commitAll(peer, 'theirs')
+    await git(peer, 'push', '-q')
+
+    await write(gamma, 'OURS.md', 'from here\n')
+    await commitAll(gamma, 'ours')
+
+    const result = await (await post('/api/sync', { repo: gamma })).json()
+    assert.deepEqual(result, { ok: true, pulled: 1, pushed: 1 })
+
+    const log = (await git(gamma, 'log', '--pretty=%s')).trim().split('\n')
+    assert.deepEqual(log, ['ours', 'theirs', 'first'], 'ours sits on top of theirs')
+    assert.equal((await git(remote, 'log', '-1', '--pretty=%s')).trim(), 'ours', 'and the remote has it')
+
+    const summary = await json<Workspace>('/api/workspace')
+    const synced = summary.repos.find(repo => repo.id === gamma) as unknown as { ahead: number; behind: number }
+    assert.deepEqual({ ahead: synced.ahead, behind: synced.behind }, { ahead: 0, behind: 0 })
+
+    // Nothing to sync with is a plain error, the same as any other failed git.
+    const orphan = await (await post('/api/sync', { repo: alpha })).json()
+    assert.equal((orphan as { ok: boolean }).ok, false)
+    assert.match((orphan as { error: string }).error, /upstream/i)
+  })
+
   test('the event stream opens and reports a change', async () => {
     const controller = new AbortController()
     const response = await fetch(`${origin}/api/events`, { signal: controller.signal })
@@ -241,6 +272,48 @@ describe('http api', () => {
     const message = new TextDecoder().decode((await reader.read()).value)
     assert.match(message, /^data: /m)
     assert.ok(JSON.parse(message.replace(/^data: /, '').trim()).repos.includes(alpha))
+
+    controller.abort()
+  })
+
+  test('a focused repo reports edits from the filesystem, but not from its build output', async () => {
+    await post('/api/focus', { repo: beta })
+
+    const controller = new AbortController()
+    const response = await fetch(`${origin}/api/events`, { signal: controller.signal })
+    const reader = response.body!.getReader()
+    await reader.read() // the retry preamble
+
+    /** Resolves with the repos named by the next event, or null if none arrives. */
+    const nextEvent = async (): Promise<string[] | null> => {
+      const timer = setTimeout(() => controller.abort(), 4000)
+      try {
+        const chunk = new TextDecoder().decode((await reader.read()).value)
+        return (JSON.parse(chunk.replace(/^data: /, '').trim()) as ChangeEvent).repos
+      } catch {
+        return null
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+
+    // A directory created after the watch began has to earn a watcher of its own,
+    // which is the case the old recursive watch got for free and this one must not.
+    await write(beta, 'src/deep/nested.ts', 'export const x = 1\n')
+    assert.ok((await nextEvent())?.includes(beta), 'a new file in a new directory is a change')
+
+    await write(beta, 'src/deep/nested.ts', 'export const x = 2\n')
+    assert.ok((await nextEvent())?.includes(beta), 'and so is editing it afterwards')
+
+    // Dependency trees are the reason this watcher walks by hand: they are large,
+    // they churn, and nothing in them belongs in the sidebar. The directory
+    // appearing is a change to the root, which is watched; what happens inside it
+    // afterwards is not.
+    await write(beta, 'node_modules/pkg/index.js', 'module.exports = 1\n')
+    assert.ok((await nextEvent())?.includes(beta), 'node_modules appearing is seen once')
+
+    await write(beta, 'node_modules/pkg/index.js', 'module.exports = 2\n')
+    assert.equal(await nextEvent(), null, 'but nothing inside it is watched')
 
     controller.abort()
   })

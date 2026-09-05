@@ -1,7 +1,10 @@
 // Per-repository preferences that belong to PeekAtGit rather than to git:
 // visibility and sort order. Stored once per workspace under XDG config.
+// The workspace opened last is remembered here too, so a bare `peekatgit`
+// reopens where you left off.
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 
@@ -13,7 +16,7 @@ export type RepoPrefs = {
 }
 
 type WorkspacePrefs = { repos: Record<string, RepoPrefs> }
-type ConfigFile = { workspaces: Record<string, WorkspacePrefs> }
+type ConfigFile = { workspaces: Record<string, WorkspacePrefs>; lastWorkspace?: string }
 
 const CONFIG_DIR = path.join(process.env.XDG_CONFIG_HOME || path.join(homedir(), '.config'), 'peekatgit')
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json')
@@ -57,6 +60,20 @@ export async function updatePrefs(workspace: string, repoId: string, patch: Repo
 export async function forgetRepo(workspace: string, repoId: string): Promise<void> {
   const config = await load()
   delete config.workspaces[workspace]?.repos[repoId]
+  await persist()
+}
+
+/** The workspace opened last, if it is still a directory we can open. */
+export async function lastWorkspace(): Promise<string | null> {
+  const config = await load()
+  const last = config.lastWorkspace
+  return last && existsSync(last) ? last : null
+}
+
+export async function rememberWorkspace(target: string): Promise<void> {
+  const config = await load()
+  if (config.lastWorkspace === target) return
+  config.lastWorkspace = target
   await persist()
 }
 

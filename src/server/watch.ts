@@ -1,14 +1,15 @@
 // The live layer. Two cheap mechanisms instead of one expensive one:
 //
-//   * a recursive watcher for the few repos the user is actually looking at,
-//     so edits show up instantly;
+//   * a watcher for the few repos the user is actually looking at, so edits
+//     show up instantly;
 //   * a slow status poll for everything else, so a `git commit` in another
 //     terminal still lands in the sidebar.
 //
 // Watching every repo recursively would mean an inotify handle per directory
 // across the whole workspace, which is exactly the load we are avoiding.
 
-import { watch } from 'node:fs/promises'
+import { watch as watchDirectory } from 'node:fs'
+import { readdir, watch } from 'node:fs/promises'
 import path from 'node:path'
 import type { ServerResponse } from 'node:http'
 import type { ChangeEvent } from '../shared/types.ts'
@@ -17,6 +18,15 @@ import { invalidate, scan, visibleRepoIds, workspaceRoot } from './workspace.ts'
 
 const MAX_WATCHERS = 3
 const POLL_MS = 2500
+/**
+ * Never worth an inotify handle: build output and dependency trees are large,
+ * churn constantly, and nothing in them is a change the sidebar should report.
+ * `target` alone is most of what a rust checkout weighs.
+ */
+const UNWATCHED = new Set([
+  'node_modules', 'vendor', 'target', 'dist', 'build', 'out', 'coverage',
+  '.next', '.nuxt', '.venv', 'venv', '__pycache__', '.gradle', '.dart_tool', '.cache',
+])
 /** Repos checked per tick, so a workspace of sixty does not spawn sixty gits at once. */
 const POLL_BATCH = 8
 
@@ -50,6 +60,9 @@ function flush(): void {
   }
   const payload: ChangeEvent = { repos: [...pending] }
   pending.clear()
+  // Every one of these makes the client re-read the workspace; a storm of them
+  // is the difference between "live" and "unusable", so it is worth counting.
+  if (process.env.PEEKATGIT_TRACE === '1') console.log(`          push  ${payload.repos.join(' ')}`)
   const message = `data: ${JSON.stringify(payload)}\n\n`
   for (const client of clients) client.write(message)
 }
@@ -72,20 +85,58 @@ export function focus(repoId: string): void {
   void watchRepo(repoId, controller)
 }
 
+/**
+ * Watches a checkout by hand: one handle per directory, build output skipped,
+ * and the walk spread across ticks by the readdir it already awaits.
+ *
+ * Node's own recursive watch is the obvious alternative and the reason this
+ * exists: on Linux it walks the entire tree in one go — `target`, `node_modules`
+ * and all — which cost half a second of blocked event loop and twenty thousand
+ * handles on one repository here. Every request in flight waited for it.
+ */
 async function watchRepo(repoId: string, controller: AbortController): Promise<void> {
+  const watched = new Set<string>()
+  // git's own directory is watched flat: the index and HEAD are worth hearing
+  // about, the loose objects churning under them are not.
+  watchDir(repoId, path.join(repoId, '.git'), controller, watched)
+  await walk(repoId, repoId, controller, watched)
+}
+
+async function walk(repoId: string, dir: string, controller: AbortController, watched: Set<string>): Promise<void> {
+  const name = path.basename(dir)
+  if (controller.signal.aborted || watched.has(dir) || name === '.git' || UNWATCHED.has(name)) return
+
+  let entries
   try {
-    for await (const event of watch(repoId, { recursive: true, signal: controller.signal })) {
-      const file = event.filename ?? ''
-      if (file.startsWith('.git/') || file.startsWith(`.git${path.sep}`)) {
-        // Skip git's internal churn, but do react to index / HEAD flips.
-        if (/\.git[\\/](index|HEAD|MERGE_MSG)$/.test(file)) notify(repoId)
-        continue
-      }
-      notify(repoId)
-    }
+    // Reading first is also how a file tells us it is not a directory: only
+    // directories get a handle, so an edited file never earns one.
+    entries = await readdir(dir, { withFileTypes: true })
   } catch {
-    // Aborted, or the platform refused a recursive watch — polling still covers it.
-    watchers.delete(repoId)
+    return // vanished mid-walk, a file, or not ours to read
+  }
+
+  watchDir(repoId, dir, controller, watched)
+  for (const entry of entries) {
+    if (entry.isDirectory()) await walk(repoId, path.join(dir, entry.name), controller, watched)
+  }
+}
+
+function watchDir(repoId: string, dir: string, controller: AbortController, watched: Set<string>): void {
+  if (watched.has(dir)) return
+  watched.add(dir)
+  try {
+    const handle = watchDirectory(dir, { signal: controller.signal }, (_event, name) => {
+      const inGit = dir.endsWith(`${path.sep}.git`)
+      // git writes constantly; only the files that mean "the index moved" count.
+      if (inGit && !/^(index|HEAD|MERGE_MSG)$/.test(String(name ?? ''))) return
+      notify(repoId)
+      // A new directory only becomes visible through its parent, so this is
+      // where a fresh `src/feature/` picks up a watcher of its own.
+      if (!inGit && name) void walk(repoId, path.join(dir, String(name)), controller, watched)
+    })
+    handle.on('error', () => handle.close())
+  } catch {
+    // Unreadable or already gone; the poll loop still covers this repo.
   }
 }
 

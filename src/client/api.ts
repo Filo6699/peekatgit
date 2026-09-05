@@ -1,8 +1,8 @@
 import type {
-  FilePayload,
   MutationResult,
+  RepoGraph,
   StatusReport,
-  TreeEntry,
+  SyncOutcome,
   Workspace,
   Worktree,
 } from '../shared/types.ts'
@@ -14,13 +14,13 @@ async function getJson<T>(url: string): Promise<T> {
   return data
 }
 
-async function post(route: string, payload: Record<string, unknown>): Promise<MutationResult> {
+async function post<T = MutationResult>(route: string, payload: Record<string, unknown>): Promise<T> {
   const response = await fetch(route, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
   })
-  return (await response.json()) as MutationResult
+  return (await response.json()) as T
 }
 
 const repoQuery = (repo: string, extra: Record<string, string> = {}): string =>
@@ -35,18 +35,20 @@ export const api = {
     return getJson(`/api/status?${query}`)
   },
 
-  tree: (repo: string, dir: string): Promise<TreeEntry[]> => getJson(`/api/tree?${repoQuery(repo, { path: dir })}`),
+  graph: (repos: string[], limit: number): Promise<RepoGraph[]> => {
+    if (!repos.length) return Promise.resolve([])
+    const query = repos.map(id => `repo=${encodeURIComponent(id)}`).join('&')
+    return getJson(`/api/graph?${query}&limit=${limit}`)
+  },
 
-  file: (repo: string, file: string): Promise<FilePayload> => getJson(`/api/file?${repoQuery(repo, { path: file })}`),
+
 
   diff: (repo: string, file: string, staged: boolean, untracked: boolean): Promise<string> =>
     fetch(
       `/api/diff?${repoQuery(repo, { path: file, staged: staged ? '1' : '0', untracked: untracked ? '1' : '0' })}`
     ).then(response => response.text()),
 
-  wsTree: (dir: string): Promise<TreeEntry[]> => getJson(`/api/ws/tree?path=${encodeURIComponent(dir)}`),
 
-  wsFile: (file: string): Promise<FilePayload> => getJson(`/api/ws/file?path=${encodeURIComponent(file)}`),
 
   worktrees: (repo: string): Promise<Worktree[]> => getJson(`/api/worktrees?${repoQuery(repo)}`),
 
@@ -54,6 +56,8 @@ export const api = {
   unstage: (repo: string, paths: string[]) => post('/api/unstage', { repo, paths }),
   discard: (repo: string, paths: string[]) => post('/api/discard', { repo, paths }),
   commit: (repo: string, message: string) => post('/api/commit', { repo, message }),
+
+  sync: (repo: string) => post<SyncOutcome>('/api/sync', { repo }),
 
   focus: (repo: string) => post('/api/focus', { repo }),
   prefs: (repo: string, patch: { hidden?: boolean; order?: number }) => post('/api/prefs', { repo, ...patch }),

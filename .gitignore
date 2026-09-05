@@ -8,3 +8,7 @@ node_modules/
 
 # logs
 *.log
+
+# my secret ai prompts
+AGENTS.md
+CLAUDE.md

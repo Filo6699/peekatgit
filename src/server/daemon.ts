@@ -64,9 +64,13 @@ export function detach(): Promise<never> {
 
 /** Tells the launcher we are serving, then lets it go. */
 export function reportReady(info: Ready): void {
-  if (!process.send) return
-  process.send(info)
-  // Both only exist on a process started with an ipc channel — which is us,
-  // when the launcher spawned us, and nobody at all when run by hand.
-  process.disconnect?.()
+  // These only exist on a process started with an ipc channel — which is us,
+  // when the launcher spawned us, and nobody at all when run by hand. The
+  // launcher hangs up as soon as it reads the message, so the channel may
+  // already be closed by the time we get here: disconnecting a closed channel
+  // emits an 'error' on the process, and nothing listens for that, which used
+  // to take the whole server down at the moment it came up.
+  if (!process.send || !process.connected) return
+  process.send(info, undefined, undefined, () => {})
+  if (process.connected) process.disconnect()
 }

@@ -29,10 +29,22 @@
         <div class="viewer-body" id="viewerBody">
           <div class="blank">
             <p>Pick a change from any repository on the left.</p>
-            <p class="hint">One file at a time. The Files tab browses the whole project.</p>
+            <p class="hint">Review changes, prepare a commit, or explore your Git history.</p>
           </div>
         </div>
       </section>
+
+      <section class="graph" id="graph" hidden>
+        <div class="graph-head">
+          <span class="label">graph</span>
+          <span class="meta" id="graphMeta"></span>
+          <span class="spacer"></span>
+          <select class="ghost" id="graphDepth" title="How far back each repository is drawn"></select>
+          <button class="ghost" id="graphReload" title="Re-read the log">reload</button>
+        </div>
+        <div class="graph-body" id="graphBody"></div>
+      </section>
+
     </main>
 
     <script type="module" src="/app.js"></script>
