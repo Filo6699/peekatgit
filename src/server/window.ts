@@ -61,6 +61,9 @@ export function openWindow(url: string, onClose: () => void): boolean {
       `--user-data-dir=${profileDir}`,
       '--no-first-run',
       '--no-default-browser-check',
+      // On hybrid Linux laptops, probing GPUs wakes the discrete card before
+      // the window appears. Our DOM/SVG UI can render without that startup cost.
+      ...(process.platform === 'linux' && process.env.PEEKATGIT_GPU !== '1' ? ['--disable-gpu'] : []),
       '--disable-features=Translate,MediaRouter',
       '--window-size=1280,860',
     ],

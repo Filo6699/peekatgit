@@ -100,6 +100,10 @@ operation while one is running. The layout adapts to narrow windows.
 
 ## Performance
 
+On Linux, the app window uses software rendering so Chrome does not wake a sleeping
+discrete GPU before showing the window. Set `PEEKATGIT_GPU=1 peekatgit` to opt into
+hardware acceleration.
+
 Workspace summaries and change lists share one Git status snapshot. Concurrent requests
 reuse in-flight reads, and local Git subprocesses are limited to four at a time. Live events
 are coalesced and refreshes are serialized; unchanged repository sections retain their DOM.
